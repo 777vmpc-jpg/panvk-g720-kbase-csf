@@ -1,4 +1,4 @@
-name: Build PanVK G720 Otimizado Faux123 Base
+name: Build PanVK G720 MC7 POCO X7 Pro - Completo
 
 on:
   workflow_dispatch:
@@ -7,15 +7,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1 Baixar base - JEITO CERTO
+      - name: 1 Baixar base G720
         run: |
           mkdir -p panvk-kbase-csf
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git panvk-kbase-csf/panvk-kbase-android
           cd panvk-kbase-csf/panvk-kbase-android
           ls -lh
           cat sources.lock || true
-          ls -lh scripts/
-          ls -lh patches/ | head -n 50
+          echo "=== PERFIS DISPONIVEIS G720 ==="
+          ls -R profiles/ 2>/dev/null || ls -R scripts/profiles/ 2>/dev/null || find . -name "*g720*" -o -name "*g615*" | head -n 50
 
       - name: 2 Instalar NDK
         uses: android-actions/setup-android@v3
@@ -31,10 +31,9 @@ jobs:
           meson --version
           ninja --version
 
-      - name: 4 Baixar Mesa com patches + Compilar G720
+      - name: 4 Fetch Mesa + Patches + Compilar G720 v12
         run: |
           cd panvk-kbase-csf/panvk-kbase-android
-          pwd
           if [ -f scripts/fetch-mesa.sh ]; then bash scripts/fetch-mesa.sh; fi
           ls -lh work/mesa/meson.build || ls -lh mesa/meson.build || true
           grep -rn "panfrost-kmds" work/mesa/meson.options work/mesa/meson_options.txt patches/ | head -n 20 || true
@@ -42,5 +41,18 @@ jobs:
           export CFLAGS=-O3
           export CXXFLAGS=-O3
           export LDFLAGS=-Wl,--strip-all
-          bash scripts/build-android.sh --profile g720-v12-csf --api 35
-          echo "
+          if ls profiles/g720* 2>/dev/null || find . -name "*g720-v12-csf*"; then PROFILE=g720-v12-csf; else PROFILE=g615-v11-csf; fi
+          echo "USANDO PERFIL: $PROFILE - universal cobre G720 v12"
+          bash scripts/build-android.sh --profile $PROFILE --api 35
+          echo "=== RESULTADO G720 ==="
+          find . -name libvulkan_panfrost.so
+          find . -name "*.zip"
+
+      - name: 5 Salvar driver G720
+        uses: actions/upload-artifact@v4
+        with:
+          name: panvk-g720-mc7-poco-x7-pro
+          path: |
+            panvk-kbase-csf/**/*.so
+            panvk-kbase-csf/**/*.zip
+          if-no-files-found: error
