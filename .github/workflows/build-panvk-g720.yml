@@ -46,7 +46,17 @@ jobs:
           needs_exe_wrapper = true
           EOF
           export PATH=$TOOLCHAIN:$PATH
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dopencl=disabled -Drusticl=false
+          # Monta os argumentos so com opcoes que existem nessa versao do Mesa
+          ARGS="-Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release"
+          # Descobre qual nome o Vulkan usa nessa versao
+          if grep -q "panvk" meson_options.txt; then ARGS="$ARGS -Dvulkan-drivers=panfrost"; fi
+          # Desliga tudo que nao precisamos, so se a opcao existir
+          for OPT in "opencl=disabled" "gallium-opencl=disabled" "opencl-spirv=false" "rusticl=false" "gallium-rusticl=false" "gallium-va=disabled" "gallium-vdpau=disabled" "gallium-xa=disabled" "gallium-media=disabled" "gallium-omx=disabled" "egl=disabled" "gbm=disabled" "glx=disabled" "opengl=false" "gles1=disabled" "gles2=disabled"; do
+            NAME=$(echo $OPT | cut -d= -f1)
+            if grep -q "'$NAME'" meson_options.txt; then ARGS="$ARGS -D$OPT"; fi
+          done
+          echo "Usando: $ARGS"
+          meson setup build-android --cross-file android-aarch64.txt $ARGS
           ninja -C build-android
 
       - name: Driver Salvar
