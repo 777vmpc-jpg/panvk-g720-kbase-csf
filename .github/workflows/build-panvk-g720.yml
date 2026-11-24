@@ -40,3 +40,18 @@ jobs:
           [host_machine]
           system = 'android'
          
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+          [properties]
+          needs_exe_wrapper = true
+          EOF
+          export PATH=$TOOLCHAIN:$PATH
+          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panvk -Dbuildtype=release -Dbase-csf=true
+          ninja -C build-android
+
+      - name: Driver Salvar
+        uses: actions/upload-artifact@v4
+        with:
+          name: panvk-g720-fps-kbase
+          path: build-android/src/panfrost/vulkan/libvulkan_panvk.so
