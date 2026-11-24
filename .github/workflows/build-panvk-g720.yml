@@ -159,18 +159,10 @@ jobs:
               env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
           PY
 
-      - name: Configurar compilacao Android
+      - name: Preparar script de compilacao
         shell: bash
         run: |
           set -euo pipefail
-
-          # O setup original usa --reconfigure mesmo
-          # quando a pasta de compilacao ainda nao existe.
-          # Removemos essa opcao para o primeiro build.
-          sed -i \
-            's/meson setup build --reconfigure/meson setup build/' \
-            setup.sh
-
           chmod +x setup.sh
 
       - name: Compilar PanVK ARM64
