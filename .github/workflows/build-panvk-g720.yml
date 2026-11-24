@@ -12,14 +12,17 @@ jobs:
           mkdir -p panvk-kbase-csf
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git panvk-kbase-csf/panvk-kbase-android
           cd panvk-kbase-csf/panvk-kbase-android
-          mkdir -p build
-          git clone https://gitlab.freedesktop.org/mesa/mesa.git build/mesa
-          cd build/mesa
+          mkdir -p work build
+          git clone https://gitlab.freedesktop.org/mesa/mesa.git work/mesa
+          cd work/mesa
           git checkout 5a07217f034b3e50d8c7c7794f97a2df1742613b
           cd ../..
-          cp -r build/mesa mesa
-          ls -lh build/mesa/meson.build
+          echo "Copia para todos os lugares que ele pode procurar"
+          cp -r work/mesa mesa
+          cp -r work/mesa build/mesa
+          ls -lh work/mesa/meson.build
           ls -lh mesa/meson.build
+          ls -lh build/mesa/meson.build
 
       - name: 2 Instalar NDK
         uses: android-actions/setup-android@v3
@@ -39,8 +42,7 @@ jobs:
         run: |
           cd panvk-kbase-csf/panvk-kbase-android
           pwd
-          ls -lh build/mesa/meson.build
-          ls -lh mesa/meson.build
+          ls -lh work/mesa/meson.build
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
           export CFLAGS=-O3
           export CXXFLAGS=-O3
