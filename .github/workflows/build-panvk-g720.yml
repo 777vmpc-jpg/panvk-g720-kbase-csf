@@ -87,6 +87,19 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Instalar bindgen para o Mesa
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # O Mesa atual exige bindgen 0.71.1 ou superior.
+          cargo install --locked bindgen-cli --version 0.72.1
+
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+          "$HOME/.cargo/bin/bindgen" --version
+
       - name: Verificar ferramentas
         run: |
           clang --version
@@ -95,6 +108,7 @@ jobs:
           ninja --version
           rustc --version
           cargo --version
+          bindgen --version
 
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
 
