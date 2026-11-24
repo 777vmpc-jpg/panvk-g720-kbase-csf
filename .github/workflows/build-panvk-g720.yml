@@ -21,10 +21,15 @@ jobs:
           packages: 'platforms;android-35 ndk;27.0.12077973 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias - TUDO de uma vez
         run: |
           sudo apt update
-          sudo apt install -y git python3 meson ninja-build pkg-config libdrm-dev flex bison
+          sudo apt install -y git python3 python3-pip meson ninja-build pkg-config libdrm-dev flex bison clang-19 llvm-19 llvm-19-dev libclc-19-dev libclc-dev spirv-tools glslang-tools libglslang-dev libspirv-tools-dev libzstd-dev libexpat1-dev libelf-dev libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev libxcb-sync-dev libxshmfence-dev libxxf86vm-dev libwayland-dev wayland-protocols gettext
+          # Garante que o libclc seja achado em qualquer lugar
+          sudo mkdir -p /usr/lib/libclc /usr/local/lib/libclc
+          for D in /usr/lib/llvm-*/lib/clang/*/lib/ /usr/lib/llvm-*/lib/libclc/; do if [ -d "$D" ]; then sudo cp -r "$D"* /usr/lib/libclc/ 2>/dev/null || true; fi; done
+          find /usr -name "*libclc*" 2>/dev/null | head -20
+          pip3 install --upgrade meson mako pyyaml || true
 
       - name: Compilador PanVK G720
         run: |
@@ -46,21 +51,21 @@ jobs:
           needs_exe_wrapper = true
           EOF
           export PATH=$TOOLCHAIN:$PATH
-          # Acha o arquivo de opcoes certo dessa versao: meson.options ou meson_options.txt
-          OPTFILE=""
-          if [ -f meson.options ]; then OPTFILE="meson.options"; elif [ -f meson_options.txt ]; then OPTFILE="meson_options.txt"; fi
-          echo "Arquivo de opcoes: $OPTFILE"
-          ARGS="-Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dopencl=disabled -Drusticl=false"
-          for OPT in "opencl-spirv=false" "gallium-va=disabled" "gallium-vdpau=disabled" "gallium-xa=disabled" "gallium-media=disabled" "egl=disabled" "gbm=disabled" "glx=disabled" "opengl=false" "gles1=disabled" "gles2=disabled"; do
-            NAME=$(echo $OPT | cut -d= -f1)
-            if [ -n "$OPTFILE" ] && grep -q "'$NAME'" "$OPTFILE"; then ARGS="$ARGS -D$OPT"; fi
-          done
-          echo "Usando: $ARGS"
-          meson setup build-android --cross-file android-aarch64.txt $ARGS
-          ninja -C build-android
+          # Limpa build antigo se existir
+          rm -rf build-android
+          # auto_features=disabled = desliga TUDO opcional de uma vez, nao precisa adivinhar nome de opcao
+          # So liga o que o PanVK precisa
+          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=enabled -Dshared-llvm=enabled
+          # Compila com poucos jobs pra nao estourar memoria do runner
+          ninja -C build-android -j2
+          echo "=== Procurando o .so gerado ==="
+          find build-android -name "*.so" | head -30
 
       - name: Driver Salvar
         uses: actions/upload-artifact@v4
         with:
           name: panvk-g720-fps-kbase
-          path: build-android/src/panfrost/vulkan/libvulkan_panvk.so
+          path: |
+            build-android/src/panfrost/vulkan/libvulkan_panvk.so
+            build-android/src/**/libvulkan_panvk.so
+          if-no-files-found: warn
