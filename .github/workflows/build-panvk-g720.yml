@@ -14,8 +14,8 @@ jobs:
           cd panvk-kbase-csf/panvk-kbase-android
           ls -lh
           cat sources.lock || true
-          echo "=== PERFIS DISPONIVEIS G720 ==="
-          ls -R profiles/ 2>/dev/null || ls -R scripts/profiles/ 2>/dev/null || find . -name "*g720*" -o -name "*g615*" | head -n 50
+          ls -lh profiles/g720-v12-csf.json
+          ls -lh patches/
 
       - name: 2 Instalar NDK
         uses: android-actions/setup-android@v3
@@ -31,24 +31,29 @@ jobs:
           meson --version
           ninja --version
 
-      - name: 4 Fetch Mesa + Patches + Compilar G720 v12
+      - name: 4 Fetch + Aplicar Patches + Compilar G720 MC7 v12
         run: |
           cd panvk-kbase-csf/panvk-kbase-android
           if [ -f scripts/fetch-mesa.sh ]; then bash scripts/fetch-mesa.sh; fi
-          ls -lh work/mesa/meson.build || ls -lh mesa/meson.build || true
-          grep -rn "panfrost-kmds" work/mesa/meson.options work/mesa/meson_options.txt patches/ | head -n 20 || true
+          ls -lh work/mesa/meson.build
+          echo "=== APLICANDO PATCHES G720 ==="
+          cd work/mesa
+          git config user.email "builder@local"
+          git config user.name "builder"
+          for p in $(find ../../patches -name "*.patch" | sort); do echo "APLICANDO: $p"; git apply "$p" || patch -p1 < "$p" || echo "FALHOU MAS CONTINUA: $p"; done
+          echo "=== CONFIRMA panfrost-kmds ==="
+          grep -rn "panfrost-kmds" meson.options meson.build | head -n 20
+          cd ../..
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
           export CFLAGS=-O3
           export CXXFLAGS=-O3
           export LDFLAGS=-Wl,--strip-all
-          if ls profiles/g720* 2>/dev/null || find . -name "*g720-v12-csf*"; then PROFILE=g720-v12-csf; else PROFILE=g615-v11-csf; fi
-          echo "USANDO PERFIL: $PROFILE - universal cobre G720 v12"
-          bash scripts/build-android.sh --profile $PROFILE --api 35
-          echo "=== RESULTADO G720 ==="
+          bash scripts/build-android.sh --profile g720-v12-csf --api 35
+          echo "=== RESULTADO G720 MC7 ==="
           find . -name libvulkan_panfrost.so
           find . -name "*.zip"
 
-      - name: 5 Salvar driver G720
+      - name: 5 Salvar driver G720 MC7
         uses: actions/upload-artifact@v4
         with:
           name: panvk-g720-mc7-poco-x7-pro
