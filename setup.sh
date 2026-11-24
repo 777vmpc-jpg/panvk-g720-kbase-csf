@@ -1,93 +1,131 @@
-export ANDROID_NDK_HOME="$HOME/Android/Sdk/ndk/27.0.12077973"
+#!/usr/bin/env bash
+set -euo pipefail
+
+export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/27.0.12077973}"
 export MESON_WORKING_DIR="$PWD"
 
+if [[ ! -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" ]]; then
+  echo "NDK nao encontrado ou incompleto: $ANDROID_NDK_HOME" >&2
+  exit 1
+fi
+
+# Build dos utilitarios nativos (host), necessarios na compilacao cruzada Android.
+# Estas opcoes seguem a configuracao documentada pelo Mesa para cross-builds Panfrost.
+rm -rf build-host
 meson setup build-host \
-    -Dplatforms=[] \
-    -Dgallium-drivers=[] \
-    -Dvulkan-drivers=[] \
-    -Dtools=panfrost \
-    -Dprecomp-compiler=enabled \
-    -Dinstall-precomp-compiler=true \
-    -Dllvm=enabled \
-    -Dmesa-clc=enabled -Dinstall-mesa-clc=true
+  -Dtools=panfrost \
+  -Dmesa-clc=enabled \
+  -Dinstall-mesa-clc=true \
+  -Dprecomp-compiler=enabled \
+  -Dinstall-precomp-compiler=true \
+  -Dllvm=enabled
 
-ninja -C build-host src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2 src/panfrost/clc/panfrost_compile
+ninja -C build-host \
+  src/compiler/clc/mesa_clc \
+  src/compiler/spirv/vtn_bindgen2 \
+  src/panfrost/clc/panfrost_compile
 
-ln -sf "$MESON_WORKING_DIR/build-host/src/compiler/clc/mesa_clc" "$MESON_WORKING_DIR/build-host/src/compiler/clc/mesa-clc"
-ln -sf "$MESON_WORKING_DIR/build-host/src/compiler/spirv/vtn_bindgen2" "$MESON_WORKING_DIR/build-host/src/compiler/spirv/vtn-bindgen2"
-ln -sf "$MESON_WORKING_DIR/build-host/src/compiler/spirv/panfrost_compile" "$MESON_WORKING_DIR/build-host/src/compiler/spirv/panfrost-compile"
+# Confirma os binarios antes de continuar; evita mascarar falhas do build-host.
+for tool in \
+  build-host/src/compiler/clc/mesa_clc \
+  build-host/src/compiler/spirv/vtn_bindgen2 \
+  build-host/src/panfrost/clc/panfrost_compile; do
+  if [[ ! -x "$tool" ]]; then
+    echo "Ferramenta nativa nao foi gerada: $tool" >&2
+    exit 1
+  fi
+done
+
+# Alguns pontos do build procuram os nomes com hifen; mantenha os nomes originais tambem.
+ln -sfn "$MESON_WORKING_DIR/build-host/src/compiler/clc/mesa_clc" \
+  "$MESON_WORKING_DIR/build-host/src/compiler/clc/mesa-clc"
+ln -sfn "$MESON_WORKING_DIR/build-host/src/compiler/spirv/vtn_bindgen2" \
+  "$MESON_WORKING_DIR/build-host/src/compiler/spirv/vtn-bindgen2"
+ln -sfn "$MESON_WORKING_DIR/build-host/src/panfrost/clc/panfrost_compile" \
+  "$MESON_WORKING_DIR/build-host/src/panfrost/clc/panfrost-compile"
 
 export PATH="$MESON_WORKING_DIR/build-host/src/compiler/clc:$MESON_WORKING_DIR/build-host/src/compiler/spirv:$MESON_WORKING_DIR/build-host/src/panfrost/clc:$PATH"
 
-$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar cr shims/librt.a
+mkdir -p shims/include
+"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" cr shims/librt.a
+export PKG_CONFIG_LIBDIR="$MESON_WORKING_DIR/shims"
 
-export PKG_CONFIG_LIBDIR=$MESON_WORKING_DIR/shims
-
-cat <<EOF > shims/xrandr.pc
+cat > shims/xrandr.pc <<'PC'
 Name: xrandr
 Description: xrandr
 Version: 1.15
 Libs: -lXrandr
 Cflags:
-EOF
+PC
 
-cat <<EOF > shims/libdrm.pc
+cat > shims/libdrm.pc <<'PC'
 Name: libdrm
 Description: libdrm
 Version: 2.5
 Libs: -ldrm
 Cflags:
-EOF
+PC
 
-cat <<EOF > shims/libx11-xcb.pc
+cat > shims/libx11-xcb.pc <<'PC'
 Name: libx11-xcb
 Description: libx11-xcb
 Version: 2.5
 Libs: -lX11-xcb
 Cflags:
-EOF
+PC
 
-#android.hardware.graphics.mapper@4.0
-cat <<EOF > shims/android.hardware.graphics.mapper.pc
+cat > shims/android.hardware.graphics.mapper.pc <<'PC'
 Name: android.hardware.graphics.mapper
 Description: android.hardware.graphics.mapper
 Version: 4.0
 Libs: -landroid.hardware.graphics.mapper
 Cflags:
-EOF
+PC
 
-for lib in xcb xcb-randr xcb-dri3 xcb-present xcb-shm xcb-sync xshmfence xcb-xfixes gralloctypes hidlbase utils cutils hardware log sync nativewindow ui;
-do
-cat <<EOF > shims/$lib.pc
+for lib in xcb xcb-randr xcb-dri3 xcb-present xcb-shm xcb-sync xshmfence xcb-xfixes gralloctypes hidlbase utils cutils hardware log sync nativewindow ui; do
+  cat > "shims/$lib.pc" <<PC
 Name: $lib
 Description: $lib
 Version: 1.15
 Libs: -l$lib
 Cflags:
-EOF
+PC
 done
 
+if [[ ! -f android.toml ]]; then
+  echo "Arquivo android.toml nao encontrado na raiz do repositorio" >&2
+  exit 1
+fi
 envsubst < android.toml > /tmp/android_wrapper.toml
 
-meson setup build --reconfigure \
-    --cross-file /tmp/android_wrapper.toml \
-    -Dbuildtype=debug \
-    -Dplatforms=android,x11 \
-    -Dandroid-stub=true \
-    -Dandroid-libbacktrace=disabled \
-    -Dplatform-sdk-version=30 \
-    -Dglx=disabled \
-    -Dgbm=disabled \
-    -Degl=disabled \
-    -Dopengl=false \
-    -Dgles1=disabled \
-    -Dgles2=disabled \
-    -Dglvnd=disabled \
-    -Dvalgrind=disabled \
-    -Dgallium-drivers= \
-    -Dshared-glapi=disabled \
-    -Dzstd=disabled \
-    -Dmesa-clc=system \
-    -Dprecomp-compiler=system \
-    -Dvulkan-drivers=panfrost \
-    -Dllvm=disabled -Dstrip=false -Dpanfrost-kmds=kbase,panthor
+MESON_ARGS=(
+  --cross-file /tmp/android_wrapper.toml
+  -Dbuildtype=debug
+  -Dplatforms=android,x11
+  -Dandroid-stub=true
+  -Dandroid-libbacktrace=disabled
+  -Dplatform-sdk-version=30
+  -Dglx=disabled
+  -Dgbm=disabled
+  -Degl=disabled
+  -Dopengl=false
+  -Dgles1=disabled
+  -Dgles2=disabled
+  -Dglvnd=disabled
+  -Dvalgrind=disabled
+  -Dgallium-drivers=
+  -Dshared-glapi=disabled
+  -Dzstd=disabled
+  -Dmesa-clc=system
+  -Dprecomp-compiler=system
+  -Dvulkan-drivers=panfrost
+  -Dllvm=disabled
+  -Dstrip=false
+  -Dpanfrost-kmds=kbase,panthor
+)
+
+if [[ -d build ]]; then
+  meson setup build --reconfigure "${MESON_ARGS[@]}"
+else
+  meson setup build "${MESON_ARGS[@]}"
+fi
