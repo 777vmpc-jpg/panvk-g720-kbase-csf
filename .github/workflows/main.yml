@@ -1,0 +1,44 @@
+name: Build PanVK G720 Kbase FPS
+
+on:
+  push:
+    branches: [ "Desenvolvimento g720" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Baixar codigo
+      uses: actions/checkout@v4
+      with:
+        ref: "Desenvolvimento g720"
+
+    - name: Instalar NDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 35
+        ndk-version: 27.0.12077973
+
+    - name: Instalar dependencias
+      run: |
+        sudo apt update
+        sudo apt install -y git python3 meson ninja-build pkg-config libdrm-dev flex bison
+
+    - name: Compilar PanVK G720
+      run: |
+        export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
+        meson setup build-android \
+          --cross-file android-aarch64.txt \
+          -Dvulkan-drivers=panvk \
+          -Dgallium-drivers=panfrost \
+          -Dplatforms=android \
+          -Dbuildtype=release \
+          -Dkbase-csf=true
+        ninja -C build-android
+
+    - name: Salvar driver
+      uses: actions/upload-artifact@v4
+      with:
+        name: panvk-g720-fps-kbase
+        path: build-android/src/panfrost/vulkan/libvulkan_panvk.so
