@@ -7,16 +7,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1 Baixar base e Mesa
+      - name: 1 Baixar base - JEITO CERTO
         run: |
           mkdir -p panvk-kbase-csf
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git panvk-kbase-csf/panvk-kbase-android
           cd panvk-kbase-csf/panvk-kbase-android
-          mkdir -p work build
-          git clone https://gitlab.freedesktop.org/mesa/mesa.git work/mesa
-          cp -r work/mesa mesa
-          cp -r work/mesa build/mesa
-          ls -lh work/mesa/meson.build
+          ls -lh
+          cat sources.lock || true
+          ls -lh scripts/
+          ls -lh patches/ | head -n 50
 
       - name: 2 Instalar NDK
         uses: android-actions/setup-android@v3
@@ -27,30 +26,21 @@ jobs:
       - name: 3 Instalar Meson e Ninja
         run: |
           sudo apt update
-          sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git
+          sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git patch
           pip3 install --upgrade meson mako pyyaml
           meson --version
           ninja --version
 
-      - name: 4 Compilar G720 v12 POCO X7 Pro 8GB
+      - name: 4 Baixar Mesa com patches + Compilar G720
         run: |
           cd panvk-kbase-csf/panvk-kbase-android
           pwd
-          ls -lh work/mesa/meson.build
+          if [ -f scripts/fetch-mesa.sh ]; then bash scripts/fetch-mesa.sh; fi
+          ls -lh work/mesa/meson.build || ls -lh mesa/meson.build || true
+          grep -rn "panfrost-kmds" work/mesa/meson.options work/mesa/meson_options.txt patches/ | head -n 20 || true
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
           export CFLAGS=-O3
           export CXXFLAGS=-O3
           export LDFLAGS=-Wl,--strip-all
           bash scripts/build-android.sh --profile g720-v12-csf --api 35
-          echo "=== RESULTADO ==="
-          find . -name libvulkan_panfrost.so
-          find . -name adpkg.zip
-
-      - name: 5 Salvar driver
-        uses: actions/upload-artifact@v4
-        with:
-          name: panvk-g720-otimizado
-          path: |
-            panvk-kbase-csf/**/*.so
-            panvk-kbase-csf/**/*.zip
-          if-no-files-found: error
+          echo "
