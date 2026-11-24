@@ -11,18 +11,19 @@ jobs:
         run: |
           pwd
           ls -la
-          echo "=== Criando a pasta que o script espera: panvk-kbase-csf/panvk-kbase-android ==="
+          echo "=== Criando a pasta que o script espera: panvk-kbase-csf/panvk-kbase-android/build/mesa ==="
           mkdir -p panvk-kbase-csf
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git panvk-kbase-csf/panvk-kbase-android
           cd panvk-kbase-csf/panvk-kbase-android
-          echo "=== Baixando Mesa 26.3.0-devel ==="
-          git clone https://gitlab.freedesktop.org/mesa/mesa.git mesa
-          cd mesa
+          mkdir -p build
+          echo "=== Baixando Mesa 26.3.0-devel DENTRO de build/ ==="
+          git clone https://gitlab.freedesktop.org/mesa/mesa.git build/mesa
+          cd build/mesa
           git checkout 5a07217f034b3e50d8c7c7794f97a2df1742613b
-          cd ..
+          cd ../..
           echo "=== CONFERE O CAMINHO QUE O SCRIPT VAI PROCURAR ==="
           pwd
-          ls -lh mesa/meson.build
+          ls -lh build/mesa/meson.build
           ls -R scripts/ | head -n 100
 
       - name: 2. Instalar NDK
@@ -43,7 +44,7 @@ jobs:
         run: |
           pwd
           ls -la
-          ls -lh panvk-kbase-csf/panvk-kbase-android/mesa/meson.build
+          ls -lh panvk-kbase-csf/panvk-kbase-android/build/mesa/meson.build
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
           export CFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
           export CXXFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
