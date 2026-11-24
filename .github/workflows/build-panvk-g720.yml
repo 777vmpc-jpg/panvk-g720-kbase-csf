@@ -24,14 +24,9 @@ jobs:
       - name: Instalar dependencias - TUDO de uma vez
         run: |
           sudo apt update
-          # Instala um por um, se um pacote nao existir ele pula e nao trava o build
           for PKG in git python3 python3-pip meson ninja-build pkg-config libdrm-dev flex bison clang-19 llvm-19 llvm-19-dev libclc-19-dev libclc-18-dev spirv-tools glslang-tools libzstd-dev libexpat1-dev libelf-dev libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev libxcb-sync-dev libxshmfence-dev libxxf86vm-dev libwayland-dev wayland-protocols gettext; do
             sudo apt install -y $PKG || echo "PULOU pacote nao encontrado: $PKG"
           done
-          # Garante que o libclc seja achado em qualquer lugar
-          sudo mkdir -p /usr/lib/libclc /usr/local/lib/libclc
-          for D in /usr/lib/llvm-*/lib/clang/*/lib/ /usr/lib/llvm-*/lib/libclc/; do if [ -d "$D" ]; then sudo cp -r "$D"* /usr/lib/libclc/ 2>/dev/null || true; fi; done
-          find /usr -name "*libclc*" 2>/dev/null | head -20
           pip3 install --upgrade meson mako pyyaml || true
 
       - name: Compilador PanVK G720
@@ -55,7 +50,7 @@ jobs:
           EOF
           export PATH=$TOOLCHAIN:$PATH
           rm -rf build-android
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=enabled -Dshared-llvm=enabled
+          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=disabled -Dshared-llvm=disabled -Dlibclc=disabled
           ninja -C build-android -j2
           echo "=== Procurando o .so gerado ==="
           find build-android -name "*.so" | head -30
