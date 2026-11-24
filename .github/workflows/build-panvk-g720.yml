@@ -44,7 +44,8 @@ jobs:
             libvulkan-dev libxml2-dev \
             libffi-dev libssl-dev \
             libedit-dev libncurses-dev \
-            libudev-dev patchelf
+            libudev-dev patchelf \
+            glslang-tools
 
       - name: Instalar Android SDK e NDK
         uses: android-actions/setup-android@v3
