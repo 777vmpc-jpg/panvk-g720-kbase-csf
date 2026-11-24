@@ -121,36 +121,42 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import os
 
-          path = Path(
-              "src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c"
-          )
-
+          path = Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c")
           source = path.read_text()
 
-          changes = [
-              (
-                  "#define KBASE_TILER_HEAP_RENEW_INTERVAL 128",
-                  "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256",
-              ),
-              (
-                  "#define KBASE_TILER_HEAP_RENEW_WORK 65536",
-                  "#define KBASE_TILER_HEAP_RENEW_WORK 131072",
-              ),
-          ]
+          interval_old = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 128"
+          interval_new = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256"
 
-          for old, new in changes:
-              if old in source:
-                  source = source.replace(old, new, 1)
-                  print("Aplicado:", new)
-              elif new in source:
-                  print("Ja aplicado:", new)
-              else:
-                  raise SystemExit(
-                      "Nao foi possivel localizar: " + old
-                  )
+          if interval_old in source:
+              source = source.replace(interval_old, interval_new, 1)
+              print("Aplicado:", interval_new)
+          elif interval_new in source:
+              print("Ja aplicado:", interval_new)
+          else:
+              raise SystemExit(
+                  "Nao foi possivel localizar a definicao de INTERVAL"
+              )
+
+          work_old = "#define KBASE_TILER_HEAP_RENEW_WORK 65536"
+          work_new = "#define KBASE_TILER_HEAP_RENEW_WORK 131072"
+
+          if work_old in source:
+              source = source.replace(work_old, work_new, 1)
+              work_status = "131072 (aplicado)"
+              print("Aplicado:", work_new)
+          elif work_new in source:
+              work_status = "131072 (ja aplicado)"
+              print("Ja aplicado:", work_new)
+          else:
+              work_status = "Nao aplicado - macro ausente no codigo-fonte"
+              print("Aviso: macro WORK nao encontrada; seguindo sem altera-la")
 
           path.write_text(source)
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
           PY
 
       - name: Configurar compilacao Android
@@ -206,7 +212,7 @@ jobs:
             echo "Android API: 30"
             echo "NDK: 27.0.12077973"
             echo "Heap renew interval: 256"
-            echo "Heap renew work: 131072"
+            echo "Heap renew work: $HEAP_RENEW_WORK_STATUS"
             echo ""
             echo "SHA256:"
             sha256sum output/libvulkan_panfrost.so
