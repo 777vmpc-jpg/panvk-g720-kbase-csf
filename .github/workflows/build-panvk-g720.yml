@@ -22,26 +22,22 @@ jobs:
           packages: 'platforms;android-35 ndk;29.0.14206865 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
+      - name: 2.5 Instalar Meson + Ninja - ESSE QUE FALTAVA
+        run: |
+          sudo apt update
+          sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git
+          pip3 install --upgrade meson mako pyyaml
+          meson --version
+          ninja --version
+          which meson
+          which ninja
+
       - name: 3. Compilar SO G720 v12 - Otimizado POCO X7 Pro 8GB
         run: |
           cd panvk-kbase-android
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
-          # Otimizacao so pra seu CPU Dimensity 8400 Ultra / Cortex-A725 + 8GB
           export CFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
           export CXXFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
           export LDFLAGS="-flto=thin -Wl,--strip-all"
-          # Usa o script oficial do repo - ele ja sabe as opcoes certas do Mesa 26.3
-          # Se o perfil g720-v12-csf nao existir, o log do passo 1 mostra o nome certo
           bash scripts/build-android.sh --profile g720-v12-csf --api 35
-          echo "=== RESULTADO ==="
-          find . -name "*.so" -o -name "*.adpkg.zip" | head -n 20
-          ls -lh out/ 2>/dev/null || ls -lh *.zip 2>/dev/null || find . -maxdepth 3 -name "*.zip" -exec ls -lh {} \;
-
-      - name: 4. Salvar driver
-        uses: actions/upload-artifact@v4
-        with:
-          name: panvk-g720-otimizado
-          path: |
-            panvk-kbase-android/**/*.so
-            panvk-kbase-android/**/*.zip
-          if-no-files-found: error
+          echo "=== RESULTADO
