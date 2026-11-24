@@ -9,16 +9,18 @@ jobs:
     steps:
       - name: 1. Baixar base + Mesa
         run: |
+          pwd
+          ls -la
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git panvk-kbase-android
           cd panvk-kbase-android
-          echo "=== Baixando Mesa 26.3.0-devel que faltava ==="
+          echo "=== Baixando Mesa 26.3.0-devel ==="
           git clone https://gitlab.freedesktop.org/mesa/mesa.git mesa
           cd mesa
           git checkout 5a07217f034b3e50d8c7c7794f97a2df1742613b
           cd ..
+          echo "=== CONFERE SE O MESA EXISTE MESMO ==="
           ls -la
-          ls -la mesa/meson.build
-          echo "=== Perfis ==="
+          ls -lh mesa/meson.build
           ls -R scripts/ | head -n 100
 
       - name: 2. Instalar NDK
@@ -37,14 +39,17 @@ jobs:
 
       - name: 4. Compilar G720 v12 - POCO X7 Pro 8GB
         run: |
-          cd panvk-kbase-android
+          pwd
+          ls -la
+          ls -lh panvk-kbase-android/mesa/meson.build
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
           export CFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
           export CXXFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
           export LDFLAGS="-flto=thin -Wl,--strip-all"
-          bash scripts/build-android.sh --profile g720-v12-csf --api 35
+          echo "=== CORRECAO: Rodar da pasta de fora, nao de dentro ==="
+          bash panvk-kbase-android/scripts/build-android.sh --profile g720-v12-csf --api 35
           echo "=== RESULTADO ==="
-          find . -name "*.so" -o -name "*.adpkg.zip" | head -n 20
+          find panvk-kbase-android -name "*.so" -o -name "*.adpkg.zip" | head -n 20
 
       - name: 5. Salvar driver
         uses: actions/upload-artifact@v4
