@@ -12,8 +12,8 @@ jobs:
     - name: Baixar codigo
       uses: actions/checkout@v4
       with:
-        ref: "Desenvolvimento g720"
-
+        ref: ${{ github.sha }}
+        fetch-depth: 1
     - name: Instalar NDK
       uses: android-actions/setup-android@v3
       with:
