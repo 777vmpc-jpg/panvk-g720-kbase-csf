@@ -18,7 +18,7 @@ jobs:
       uses: android-actions/setup-android@v3
       with:
         api-level: 35
-        ndk-version: 27.0.12077973
+        ndk-version: 27.2.12479018
 
     - name: Instalar dependencias
       run: |
