@@ -46,14 +46,14 @@ jobs:
           needs_exe_wrapper = true
           EOF
           export PATH=$TOOLCHAIN:$PATH
-          # Monta os argumentos so com opcoes que existem nessa versao do Mesa
-          ARGS="-Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release"
-          # Descobre qual nome o Vulkan usa nessa versao
-          if grep -q "panvk" meson_options.txt; then ARGS="$ARGS -Dvulkan-drivers=panfrost"; fi
-          # Desliga tudo que nao precisamos, so se a opcao existir
-          for OPT in "opencl=disabled" "gallium-opencl=disabled" "opencl-spirv=false" "rusticl=false" "gallium-rusticl=false" "gallium-va=disabled" "gallium-vdpau=disabled" "gallium-xa=disabled" "gallium-media=disabled" "gallium-omx=disabled" "egl=disabled" "gbm=disabled" "glx=disabled" "opengl=false" "gles1=disabled" "gles2=disabled"; do
+          # Acha o arquivo de opcoes certo dessa versao: meson.options ou meson_options.txt
+          OPTFILE=""
+          if [ -f meson.options ]; then OPTFILE="meson.options"; elif [ -f meson_options.txt ]; then OPTFILE="meson_options.txt"; fi
+          echo "Arquivo de opcoes: $OPTFILE"
+          ARGS="-Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dopencl=disabled -Drusticl=false"
+          for OPT in "opencl-spirv=false" "gallium-va=disabled" "gallium-vdpau=disabled" "gallium-xa=disabled" "gallium-media=disabled" "egl=disabled" "gbm=disabled" "glx=disabled" "opengl=false" "gles1=disabled" "gles2=disabled"; do
             NAME=$(echo $OPT | cut -d= -f1)
-            if grep -q "'$NAME'" meson_options.txt; then ARGS="$ARGS -D$OPT"; fi
+            if [ -n "$OPTFILE" ] && grep -q "'$NAME'" "$OPTFILE"; then ARGS="$ARGS -D$OPT"; fi
           done
           echo "Usando: $ARGS"
           meson setup build-android --cross-file android-aarch64.txt $ARGS
