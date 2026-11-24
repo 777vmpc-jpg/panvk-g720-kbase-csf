@@ -21,7 +21,7 @@ jobs:
           packages: 'platforms;android-35 ndk;27.0.12077973 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
-      - name: Instalar dependencias - TUDO de uma vez
+      - name: Instalar dependencias
         run: |
           sudo apt update
           for PKG in git python3 python3-pip meson ninja-build pkg-config libdrm-dev flex bison clang-19 llvm-19 llvm-19-dev libclc-19-dev spirv-tools glslang-tools libzstd-dev libexpat1-dev libelf-dev libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev libxcb-sync-dev libxshmfence-dev libxxf86vm-dev libwayland-dev wayland-protocols gettext; do
@@ -29,10 +29,11 @@ jobs:
           done
           pip3 install --upgrade meson mako pyyaml || true
 
-      - name: Compilador PanVK G720
+      - name: Compilador PanVK G720 - Sem chute
         run: |
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
           export TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+          export PATH=$TOOLCHAIN:$PATH
           cat > android-aarch64.txt << 'EOF'
           [binaries]
           c = 'aarch64-linux-android35-clang'
@@ -48,14 +49,33 @@ jobs:
           [properties]
           needs_exe_wrapper = true
           EOF
-          export PATH=$TOOLCHAIN:$PATH
+          # Descobre as opcoes REAIS do seu Mesa, sem chutar
+          python3 << 'PY'
+          import re, pathlib
+          text = pathlib.Path("meson_options.txt").read_text(errors="ignore")
+          opts = set(re.findall(r"option\(\s*['\"]([^'\"]+)['\"]", text))
+          print("Opcoes encontradas:", sorted(opts))
+          # So usa o que existe
+          args = []
+          if "gallium-drivers" in opts: args.append("-Dgallium-drivers=")
+          if "vulkan-drivers" in opts: args.append("-Dvulkan-drivers=panfrost")
+          if "buildtype" in opts or True: args.append("-Dbuildtype=release")
+          args.append("-Dauto_features=disabled")
+          # Desliga tudo que puxa LLVM, MAS so se existir
+          for o in ["llvm","shared-llvm","clc","gallium-va","gallium-vdpau","gallium-xa","gallium-nine","gallium-opencl","opencl","va","vdpau","xa","nine"]:
+              if o in opts:
+                  args.append(f"-D{o}=disabled")
+                  print(f"Desligando: {o}")
+          pathlib.Path("meson_args.txt").write_text(" ".join(args))
+          print("ARGS finais:", " ".join(args))
+          PY
+          cat meson_args.txt
           rm -rf build-android
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers= -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=disabled -Dshared-llvm=disabled
+          meson setup build-android --cross-file android-aarch64.txt $(cat meson_args.txt)
           ninja -C build-android -j2
-          echo "=== Procurando o .so gerado ==="
           find build-android -name "*.so"
           ls -lh build-android/src/panfrost/vulkan/libvulkan_panvk.so
-          test -f build-android/src/panfrost/vulkan/libvulkan_panvk.so || (echo "ERRO: .so nao foi criado!" && exit 1)
+          test -f build-android/src/panfrost/vulkan/libvulkan_panvk.so || (echo "ERRO: .so nao criado" && exit 1)
 
       - name: Driver Salvar
         uses: actions/upload-artifact@v4
