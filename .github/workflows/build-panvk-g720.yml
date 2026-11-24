@@ -83,6 +83,43 @@ jobs:
 
           echo "$HOME/panvk-venv/bin" >> "$GITHUB_PATH"
 
+      - name: Compilar e instalar libdrm 2.4.133 para o host
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LIBDRM_VERSION="2.4.133"
+          ARCHIVE="libdrm-${LIBDRM_VERSION}.tar.xz"
+          URL="https://dri.freedesktop.org/libdrm/${ARCHIVE}"
+          SHA256="fc68f9d0ba2ea63c9432a299e14fea09fad7a8a66e8039fcd7802ca59f77b4f5"
+
+          curl --fail --location --retry 3 "$URL" -o "/tmp/$ARCHIVE"
+          echo "$SHA256  /tmp/$ARCHIVE" | sha256sum --check --status
+
+          mkdir -p /tmp/libdrm-src
+          tar -xf "/tmp/$ARCHIVE" -C /tmp/libdrm-src --strip-components=1
+
+          meson setup /tmp/libdrm-src/build /tmp/libdrm-src \
+            --prefix=/usr/local \
+            --buildtype=release
+
+          ninja -C /tmp/libdrm-src/build
+          sudo ninja -C /tmp/libdrm-src/build install
+          sudo ldconfig
+
+          LIBDRM_PC="$(find /usr/local -type f -name libdrm.pc -print -quit)"
+          if [ -z "$LIBDRM_PC" ]; then
+            echo "libdrm.pc nao foi instalado"
+            exit 1
+          fi
+
+          LIBDRM_PC_DIR="$(dirname "$LIBDRM_PC")"
+          echo "PKG_CONFIG_PATH=$LIBDRM_PC_DIR:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+          PKG_CONFIG_PATH="$LIBDRM_PC_DIR:${PKG_CONFIG_PATH:-}" pkg-config --modversion libdrm
+          PKG_CONFIG_PATH="$LIBDRM_PC_DIR:${PKG_CONFIG_PATH:-}" pkg-config --atleast-version=2.4.133 libdrm
+
       - name: Instalar Rust e Cargo
         uses: dtolnay/rust-toolchain@stable
         with:
