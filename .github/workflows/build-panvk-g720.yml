@@ -14,15 +14,9 @@ jobs:
           cd panvk-kbase-csf/panvk-kbase-android
           mkdir -p work build
           git clone https://gitlab.freedesktop.org/mesa/mesa.git work/mesa
-          cd work/mesa
-          git checkout 5a07217f034b3e50d8c7c7794f97a2df1742613b
-          cd ../..
-          echo "Copia para todos os lugares que ele pode procurar"
           cp -r work/mesa mesa
           cp -r work/mesa build/mesa
           ls -lh work/mesa/meson.build
-          ls -lh mesa/meson.build
-          ls -lh build/mesa/meson.build
 
       - name: 2 Instalar NDK
         uses: android-actions/setup-android@v3
@@ -48,6 +42,7 @@ jobs:
           export CXXFLAGS=-O3
           export LDFLAGS=-Wl,--strip-all
           bash scripts/build-android.sh --profile g720-v12-csf --api 35
+          echo "=== RESULTADO ==="
           find . -name libvulkan_panfrost.so
           find . -name adpkg.zip
 
