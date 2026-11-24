@@ -46,7 +46,7 @@ jobs:
           needs_exe_wrapper = true
           EOF
           export PATH=$TOOLCHAIN:$PATH
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dbase-csf=true
+          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release
           ninja -C build-android
 
       - name: Driver Salvar
