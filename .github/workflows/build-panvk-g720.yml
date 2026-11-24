@@ -11,10 +11,13 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git
           cd panvk-kbase-android
-          git log --oneline -1
-          echo "=== PERFIS QUE EXISTEM DE VERDADE NO REPO ==="
+          echo "=== O QUE TEM DENTRO DO REPO ==="
+          ls -la
+          cat README.md 2>/dev/null | head -n 150
+          echo "=== AJUDA DO SCRIPT ==="
+          bash scripts/build-android.sh --help 2>&1 | head -n 100 || cat scripts/build-android.sh | head -n 150
+          echo "=== PERFIS ==="
           ls -R scripts/ | head -n 100
-          find . -name "*g720*" -o -name "*v12*" | head -n 50
 
       - name: 2. Instalar NDK
         uses: android-actions/setup-android@v3
@@ -22,15 +25,13 @@ jobs:
           packages: 'platforms;android-35 ndk;29.0.14206865 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
-      - name: 2.5 Instalar Meson + Ninja - ESSE QUE FALTAVA
+      - name: 2.5 Instalar Meson + Ninja
         run: |
           sudo apt update
           sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git
           pip3 install --upgrade meson mako pyyaml
           meson --version
           ninja --version
-          which meson
-          which ninja
 
       - name: 3. Compilar SO G720 v12 - Otimizado POCO X7 Pro 8GB
         run: |
@@ -39,5 +40,19 @@ jobs:
           export CFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
           export CXXFLAGS="-O3 -mcpu=cortex-a725 -flto=thin -fno-plt"
           export LDFLAGS="-flto=thin -Wl,--strip-all"
+          echo "=== BAIXANDO SUBMODULO MESA - ESSE QUE FALTAVA ==="
+          git submodule update --init --recursive || true
+          ls -la
+          ls -la mesa/ 2>/dev/null | head -n 20 || echo "pasta mesa ainda nao existe"
           bash scripts/build-android.sh --profile g720-v12-csf --api 35
-          echo "=== RESULTADO
+          echo "=== RESULTADO ==="
+          find . -name "*.so" -o -name "*.adpkg.zip" | head -n 20
+
+      - name: 4. Salvar driver
+        uses: actions/upload-artifact@v4
+        with:
+          name: panvk-g720-otimizado
+          path: |
+            panvk-kbase-android/**/*.so
+            panvk-kbase-android/**/*.zip
+          if-no-files-found: error
