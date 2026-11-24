@@ -50,7 +50,7 @@ jobs:
           EOF
           export PATH=$TOOLCHAIN:$PATH
           rm -rf build-android
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers= -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=disabled -Dshared-llvm=disabled -Dgallium-va=disabled -Dgallium-vdpau=disabled -Dgallium-xa=disabled -Dgallium-nine=disabled
+          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers= -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=disabled -Dshared-llvm=disabled
           ninja -C build-android -j2
           echo "=== Procurando o .so gerado ==="
           find build-android -name "*.so"
