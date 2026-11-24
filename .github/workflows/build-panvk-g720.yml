@@ -1,8 +1,10 @@
 name: Build PanVK G720 Kbase FPS
+
 on:
   push:
     branches: [ "Desenvolvimento g720" ]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -12,22 +14,29 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
+
       - name: Instalar NDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'platforms;android-35 ndk;27.0.12077973 build-tools;35.0.0'
           accept-android-sdk-licenses: true
+
       - name: Instalar dependencias
         run: |
           sudo apt update
           sudo apt install -y git python3 meson ninja-build pkg-config libdrm-dev flex bison
+
       - name: Compilador PanVK G720
         run: |
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panvk -Dbuildtype=release -Dbase-csf=true
-          ninja -C build-android
-      - name: Driver Salvar
-        uses: actions/upload-artifact@v4
-        with:
-          name: panvk-g720-fps-kbase
-          path: build-android/src/panfrost/vulkan/libvulkan_panvk.so
+          export TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+          cat > android-aarch64.txt << 'EOF'
+          [binaries]
+          c = 'aarch64-linux-android35-clang'
+          cpp = 'aarch64-linux-android35-clang++'
+          ar = 'llvm-ar'
+          strip = 'llvm-strip'
+          pkgconfig = 'pkg-config'
+          [host_machine]
+          system = 'android'
+         
