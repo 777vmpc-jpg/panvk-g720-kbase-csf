@@ -21,16 +21,16 @@ jobs:
           packages: 'platforms;android-35 ndk;29.0.14206865 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
-      - name: 3 Instalar Meson Ninja e libdrm
+      - name: 3 Instalar Meson Ninja libdrm e Clang para mesa_clc
         run: |
           sudo apt update
-          sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git patch libdrm-dev libexpat1-dev zlib1g-dev libx11-dev libxext-dev libxdamage-dev libxcb-dri3-dev libwayland-dev wayland-protocols
+          sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git patch libdrm-dev libexpat1-dev zlib1g-dev libx11-dev libxext-dev libxdamage-dev libxcb-dri3-dev libwayland-dev wayland-protocols clang-19 llvm-19 libclc-19-dev spirv-tools libspirv-tools-dev
           pip3 install --upgrade meson mako pyyaml
           pkg-config --modversion libdrm
+          clang-19 --version
           meson --version
-          ninja --version
 
-      - name: 4 Fetch + Patches na ordem certa + Build G720 MC7
+      - name: 4 Fetch + Patches + Compilar mesa_clc host + Build G720 MC7
         run: |
           cd panvk-kbase-csf/panvk-kbase-android
           bash scripts/fetch-mesa.sh
@@ -42,6 +42,12 @@ jobs:
           echo "=== RESTO DOS PATCHES ==="
           for p in $(find ../../patches -name "*.patch" | sort | grep -v kbase-common); do echo "APLICANDO: $p"; git apply "$p" || patch -p1 --batch < "$p" || echo "FALHOU MAS SEGUE: $p"; done
           grep -rn "panfrost-kmds" meson.options meson.build | head -n 20
+          echo "=== COMPILANDO mesa_clc HOST ==="
+          meson setup /tmp/mesa-host -Dgallium-drivers= -Dvulkan-drivers= -Dbuild-tests=false -Dmesa-clc=true -Dlibclc=true -Dclang=enabled -Dllvm=enabled -Dtools= -Dprefix=/tmp/mesa-host-install || meson setup /tmp/mesa-host -Dgallium-drivers=swrast -Dvulkan-drivers= -Dmesa-clc=true -Dtools=
+          ninja -C /tmp/mesa-host src/compiler/clc/mesa_clc -j4 || ninja -C /tmp/mesa-host mesa_clc -j4 || ninja -C /tmp/mesa-host -j4
+          find /tmp/mesa-host -name "mesa_clc" -type f | head
+          export PATH=/tmp/mesa-host/src/compiler/clc:$PATH
+          which mesa_clc || find /tmp/mesa-host -name mesa_clc
           cd ../..
           rm -rf build/android-bionic
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
