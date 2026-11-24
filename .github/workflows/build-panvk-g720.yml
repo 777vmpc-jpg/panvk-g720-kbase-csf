@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Baixar base + Mesa em todos os caminhos que o script procura
+      - name: 1 Baixar base e Mesa
         run: |
           mkdir -p panvk-kbase-csf
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git panvk-kbase-csf/panvk-kbase-android
@@ -17,20 +17,17 @@ jobs:
           cd build/mesa
           git checkout 5a07217f034b3e50d8c7c7794f97a2df1742613b
           cd ../..
-          echo "=== Deixa o Mesa nos 2 lugares que o script procura ==="
           cp -r build/mesa mesa
-          mkdir -p build/android-bionic
           ls -lh build/mesa/meson.build
           ls -lh mesa/meson.build
-          ls -R scripts/ | head -n 100
 
-      - name: 2. Instalar NDK
+      - name: 2 Instalar NDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'platforms;android-35 ndk;29.0.14206865 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
-      - name: 3. Instalar Meson + Ninja
+      - name: 3 Instalar Meson e Ninja
         run: |
           sudo apt update
           sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git
@@ -38,11 +35,25 @@ jobs:
           meson --version
           ninja --version
 
-      - name: 4. Compilar G720 v12 - POCO X7 Pro 8GB
+      - name: 4 Compilar G720 v12 POCO X7 Pro 8GB
         run: |
           cd panvk-kbase-csf/panvk-kbase-android
           pwd
           ls -lh build/mesa/meson.build
           ls -lh mesa/meson.build
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
-          export CFLAGS="-O3 -mcpu=cortex-a
+          export CFLAGS=-O3
+          export CXXFLAGS=-O3
+          export LDFLAGS=-Wl,--strip-all
+          bash scripts/build-android.sh --profile g720-v12-csf --api 35
+          find . -name libvulkan_panfrost.so
+          find . -name adpkg.zip
+
+      - name: 5 Salvar driver
+        uses: actions/upload-artifact@v4
+        with:
+          name: panvk-g720-otimizado
+          path: |
+            panvk-kbase-csf/**/*.so
+            panvk-kbase-csf/**/*.zip
+          if-no-files-found: error
