@@ -17,7 +17,6 @@ jobs:
       - name: Instalar NDK
         uses: android-actions/setup-android@v3
         with:
-          cmdline-tools-version: 16.0
           packages: 'platforms;android-35;ndk;27.0.12077973;build-tools;35.0.0'
           accept-android-sdk-licenses: true
       - name: Instalar dependencias
