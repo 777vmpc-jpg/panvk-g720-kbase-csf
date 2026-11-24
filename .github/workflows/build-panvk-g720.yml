@@ -29,11 +29,13 @@ jobs:
           done
           pip3 install --upgrade meson mako pyyaml || true
 
-      - name: Compilador PanVK G720 - Sem chute
+      - name: Compilador PanVK G720
         run: |
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
           export TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
-          export PATH=$TOOLCHAIN:$PATH
+          export PATH=/usr/lib/llvm-19/bin:$TOOLCHAIN:$PATH
+          export LLVM_CONFIG=/usr/lib/llvm-19/bin/llvm-config
+          llvm-config --version
           cat > android-aarch64.txt << 'EOF'
           [binaries]
           c = 'aarch64-linux-android35-clang'
@@ -41,6 +43,7 @@ jobs:
           ar = 'llvm-ar'
           strip = 'llvm-strip'
           pkg-config = 'pkg-config'
+          llvm-config = '/usr/lib/llvm-19/bin/llvm-config'
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
@@ -49,29 +52,16 @@ jobs:
           [properties]
           needs_exe_wrapper = true
           EOF
-          # Descobre as opcoes REAIS do seu Mesa, sem chutar
-          python3 << 'PY'
-          import re, pathlib
-          text = pathlib.Path("meson_options.txt").read_text(errors="ignore")
-          opts = set(re.findall(r"option\(\s*['\"]([^'\"]+)['\"]", text))
-          print("Opcoes encontradas:", sorted(opts))
-          # So usa o que existe
-          args = []
-          if "gallium-drivers" in opts: args.append("-Dgallium-drivers=")
-          if "vulkan-drivers" in opts: args.append("-Dvulkan-drivers=panfrost")
-          if "buildtype" in opts or True: args.append("-Dbuildtype=release")
-          args.append("-Dauto_features=disabled")
-          # Desliga tudo que puxa LLVM, MAS so se existir
-          for o in ["llvm","shared-llvm","clc","gallium-va","gallium-vdpau","gallium-xa","gallium-nine","gallium-opencl","opencl","va","vdpau","xa","nine"]:
-              if o in opts:
-                  args.append(f"-D{o}=disabled")
-                  print(f"Desligando: {o}")
-          pathlib.Path("meson_args.txt").write_text(" ".join(args))
-          print("ARGS finais:", " ".join(args))
-          PY
-          cat meson_args.txt
+          cat > native.txt << 'EOF'
+          [binaries]
+          c = 'cc'
+          cpp = 'c++'
+          ar = 'ar'
+          strip = 'strip'
+          llvm-config = '/usr/lib/llvm-19/bin/llvm-config'
+          EOF
           rm -rf build-android
-          meson setup build-android --cross-file android-aarch64.txt $(cat meson_args.txt)
+          meson setup build-android --cross-file android-aarch64.txt --native-file native.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=enabled -Dshared-llvm=enabled
           ninja -C build-android -j2
           find build-android -name "*.so"
           ls -lh build-android/src/panfrost/vulkan/libvulkan_panvk.so
