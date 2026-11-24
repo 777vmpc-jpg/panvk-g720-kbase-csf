@@ -1,4 +1,4 @@
-name: Build PanVK G720 MC7 POCO X7 Pro - Completo
+name: Build PanVK G720 MC7 POCO X7 Pro - Build 1
 
 on:
   workflow_dispatch:
@@ -12,10 +12,8 @@ jobs:
           mkdir -p panvk-kbase-csf
           git clone --depth 1 https://github.com/JICA98/panvk-kbase-android.git panvk-kbase-csf/panvk-kbase-android
           cd panvk-kbase-csf/panvk-kbase-android
-          ls -lh
-          cat sources.lock || true
           ls -lh profiles/g720-v12-csf.json
-          ls -lh patches/
+          cat sources.lock || true
 
       - name: 2 Instalar NDK
         uses: android-actions/setup-android@v3
@@ -23,40 +21,42 @@ jobs:
           packages: 'platforms;android-35 ndk;29.0.14206865 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
-      - name: 3 Instalar Meson e Ninja
+      - name: 3 Instalar Meson Ninja e libdrm
         run: |
           sudo apt update
-          sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git patch
+          sudo apt install -y python3 python3-pip meson ninja-build pkg-config flex bison gettext git patch libdrm-dev libexpat1-dev zlib1g-dev libx11-dev libxext-dev libxdamage-dev libxcb-dri3-dev libwayland-dev wayland-protocols
           pip3 install --upgrade meson mako pyyaml
+          pkg-config --modversion libdrm
           meson --version
           ninja --version
 
-      - name: 4 Fetch + Aplicar Patches + Compilar G720 MC7 v12
+      - name: 4 Fetch + Patches na ordem certa + Build G720 MC7
         run: |
           cd panvk-kbase-csf/panvk-kbase-android
-          if [ -f scripts/fetch-mesa.sh ]; then bash scripts/fetch-mesa.sh; fi
-          ls -lh work/mesa/meson.build
-          echo "=== APLICANDO PATCHES G720 ==="
+          bash scripts/fetch-mesa.sh
           cd work/mesa
           git config user.email "builder@local"
           git config user.name "builder"
-          for p in $(find ../../patches -name "*.patch" | sort); do echo "APLICANDO: $p"; git apply "$p" || patch -p1 < "$p" || echo "FALHOU MAS CONTINUA: $p"; done
-          echo "=== CONFIRMA panfrost-kmds ==="
+          echo "=== PATCHES KBASE PRIMEIRO ==="
+          for p in $(find ../../patches/kbase-common -name "*.patch" | sort); do echo "APLICANDO: $p"; git apply "$p" || patch -p1 --batch < "$p" || echo "FALHOU: $p"; done
+          echo "=== RESTO DOS PATCHES ==="
+          for p in $(find ../../patches -name "*.patch" | sort | grep -v kbase-common); do echo "APLICANDO: $p"; git apply "$p" || patch -p1 --batch < "$p" || echo "FALHOU MAS SEGUE: $p"; done
           grep -rn "panfrost-kmds" meson.options meson.build | head -n 20
           cd ../..
+          rm -rf build/android-bionic
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865
           export CFLAGS=-O3
           export CXXFLAGS=-O3
           export LDFLAGS=-Wl,--strip-all
+          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
           bash scripts/build-android.sh --profile g720-v12-csf --api 35
-          echo "=== RESULTADO G720 MC7 ==="
           find . -name libvulkan_panfrost.so
           find . -name "*.zip"
 
-      - name: 5 Salvar driver G720 MC7
+      - name: 5 Salvar Build 1
         uses: actions/upload-artifact@v4
         with:
-          name: panvk-g720-mc7-poco-x7-pro
+          name: panvk-g720-mc7-build1
           path: |
             panvk-kbase-csf/**/*.so
             panvk-kbase-csf/**/*.zip
