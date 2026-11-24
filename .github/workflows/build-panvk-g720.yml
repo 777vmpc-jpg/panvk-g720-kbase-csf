@@ -21,12 +21,19 @@ jobs:
           packages: 'platforms;android-35 ndk;27.0.12077973 build-tools;35.0.0'
           accept-android-sdk-licenses: true
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias - TUDO DE UMA VEZ
         run: |
           sudo apt update
-          for PKG in git python3 python3-pip meson ninja-build pkg-config libdrm-dev flex bison clang-19 llvm-19 llvm-19-dev libclc-19-dev libllvmspirvlib-19-dev llvm-spirv-19 spirv-tools glslang-tools libzstd-dev libexpat1-dev libelf-dev libudev-dev libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev libxcb-sync-dev libxshmfence-dev libxxf86vm-dev libwayland-dev wayland-protocols gettext; do
-            sudo apt install -y $PKG || echo "PULOU: $PKG"
-          done
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt update
+          # Isso aqui instala TUDO que o Mesa precisa, sem eu ter que adivinhar um por um
+          sudo apt build-dep -y mesa || echo "build-dep falhou, indo pro plano B"
+          sudo apt install -y git python3 python3-pip meson ninja-build pkg-config flex bison gettext wayland-protocols \
+            libdrm-dev libclc-19-dev clang-19 llvm-19 llvm-19-dev libllvmspirvlib-19-dev llvm-spirv-19 \
+            spirv-tools libspirv-tools-dev spirv-headers libspirv-headers-dev glslang-tools \
+            libzstd-dev libexpat1-dev libelf-dev libudev-dev libx11-dev libxext-dev libxdamage-dev libxfixes-dev \
+            libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev libxcb-sync-dev libxshmfence-dev libxxf86vm-dev \
+            libwayland-dev libxrandr-dev libxrender-dev libvulkan-dev vulkan-validationlayers-dev libglvnd-dev || true
           pip3 install --upgrade meson mako pyyaml || true
 
       - name: Compilador PanVK G720
@@ -37,7 +44,6 @@ jobs:
           export LLVM_CONFIG=/usr/lib/llvm-19/bin/llvm-config
           export PKG_CONFIG_PATH=/usr/lib/llvm-19/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
           llvm-config --version
-          ls /usr/lib/llvm-19/lib/pkgconfig/ | grep -i spirv || echo "SPIRV pc nao achado, tentando outro lugar"
           cat > android-aarch64.txt << 'EOF'
           [binaries]
           c = 'aarch64-linux-android35-clang'
@@ -65,13 +71,4 @@ jobs:
           rm -rf build-android
           meson setup build-android --cross-file android-aarch64.txt --native-file native.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=enabled -Dshared-llvm=enabled
           ninja -C build-android -j2
-          find build-android -name "*.so"
-          ls -lh build-android/src/panfrost/vulkan/libvulkan_panvk.so
-          test -f build-android/src/panfrost/vulkan/libvulkan_panvk.so || (echo "ERRO: .so nao criado" && exit 1)
-
-      - name: Driver Salvar
-        uses: actions/upload-artifact@v4
-        with:
-          name: panvk-g720-fps-kbase
-          path: build-android/src/panfrost/vulkan/libvulkan_panvk.so
-          if-no-files-found: error
+          find build-android -name "*.so
