@@ -38,28 +38,4 @@ jobs:
           c = 'aarch64-linux-android35-clang'
           cpp = 'aarch64-linux-android35-clang++'
           ar = 'llvm-ar'
-          strip = 'llvm-strip'
-          pkgconfig = 'pkg-config'
-          [host_machine]
-          system = 'android'
-          cpu_family = 'aarch64'
-          cpu = 'aarch64'
-          endian = 'little'
-          [properties]
-          needs_exe_wrapper = true
-          EOF
-          export PATH=$TOOLCHAIN:$PATH
-          rm -rf build-android
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dauto_features=disabled -Dllvm=disabled -Dshared-llvm=disabled -Dlibclc=disabled
-          ninja -C build-android -j2
-          echo "=== Procurando o .so gerado ==="
-          find build-android -name "*.so" | head -30
-
-      - name: Driver Salvar
-        uses: actions/upload-artifact@v4
-        with:
-          name: panvk-g720-fps-kbase
-          path: |
-            build-android/src/panfrost/vulkan/libvulkan_panvk.so
-            build-android/src/**/libvulkan_panvk.so
-          if-no-files-found: warn
+          strip
