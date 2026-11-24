@@ -39,7 +39,6 @@ jobs:
           pkgconfig = 'pkg-config'
           [host_machine]
           system = 'android'
-         
           cpu_family = 'aarch64'
           cpu = 'aarch64'
           endian = 'little'
@@ -47,7 +46,7 @@ jobs:
           needs_exe_wrapper = true
           EOF
           export PATH=$TOOLCHAIN:$PATH
-          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panvk -Dbuildtype=release -Dbase-csf=true
+          meson setup build-android --cross-file android-aarch64.txt -Dgallium-drivers=panfrost -Dvulkan-drivers=panfrost -Dbuildtype=release -Dbase-csf=true
           ninja -C build-android
 
       - name: Driver Salvar
