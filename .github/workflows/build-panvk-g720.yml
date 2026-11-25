@@ -42,7 +42,7 @@ jobs:
             libllvmspirvlib-18-dev \
             libdrm-dev libelf-dev \
             libexpat1-dev libzstd-dev zlib1g-dev \
-            libwayland-dev wayland-protocols \
+            libwayland-dev libwayland-egl-backend-dev wayland-protocols \
             libx11-dev libx11-xcb-dev \
             libxrandr-dev libxdamage-dev \
             libxfixes-dev libxext-dev \
