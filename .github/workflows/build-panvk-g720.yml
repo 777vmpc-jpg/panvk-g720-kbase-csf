@@ -36,6 +36,7 @@ jobs:
             clang llvm llvm-dev lld \
             libclang-dev \
             libclc-18 libclc-18-dev \
+            libllvmspirvlib-18-dev \
             libdrm-dev libelf-dev \
             libexpat1-dev libzstd-dev zlib1g-dev \
             libwayland-dev wayland-protocols \
