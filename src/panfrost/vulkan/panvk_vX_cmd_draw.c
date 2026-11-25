@@ -983,7 +983,17 @@ panvk_per_arch(CmdBindVertexBuffers2)(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
 
-   assert(firstBinding + bindingCount <= MAX_VBS);
+   /* Invalid Vulkan input must not crash the driver or index past the
+    * command-buffer vertex-binding array. Keep the check subtraction-based
+    * so firstBinding + bindingCount cannot overflow uint32_t.
+    */
+   if (unlikely(firstBinding >= MAX_VBS ||
+                bindingCount > MAX_VBS - firstBinding)) {
+      mesa_loge("CmdBindVertexBuffers2: invalid vertex binding range "
+                "(firstBinding=%u, bindingCount=%u, max=%u)",
+                firstBinding, bindingCount, MAX_VBS);
+      return;
+   }
 
    if (pStrides) {
       vk_cmd_set_vertex_binding_strides(&cmdbuf->vk, firstBinding,
