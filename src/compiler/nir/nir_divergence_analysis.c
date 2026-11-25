@@ -794,6 +794,8 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_constant:
    case nir_intrinsic_load_sample_pos_from_id:
    case nir_intrinsic_load_kernel_input:
+   /* Provoking vertex mode is draw state, uniform across invocations. */
+   case nir_intrinsic_load_provoking_last:
    case nir_intrinsic_load_task_payload:
    case nir_intrinsic_load_buffer_amd:
    case nir_intrinsic_load_typed_buffer_amd:
