@@ -190,34 +190,6 @@ vk_gralloc_to_drm_explicit_layout(
    return VK_SUCCESS;
 }
 
-/*
- * Some Android gralloc implementations place metadata or gralloc-extra file
- * descriptors before the actual dma-buf in native_handle_t::data.  Select
- * the largest seekable fd instead of assuming data[0] is the image buffer.
- */
-static int
-vk_android_find_anb_dma_buf_fd(const native_handle_t *handle)
-{
-   if (!handle || handle->numFds <= 0)
-      return -1;
-
-   int best_fd = -1;
-   off_t best_size = 0;
-   for (int i = 0; i < handle->numFds; i++) {
-      int fd = handle->data[i];
-      if (fd < 0)
-         continue;
-
-      off_t size = lseek(fd, 0, SEEK_END);
-      if (size > best_size) {
-         best_size = size;
-         best_fd = fd;
-      }
-   }
-
-   return best_fd;
-}
-
 VkResult
 vk_android_import_anb_memory(struct vk_device *device,
                              struct vk_image *image,
@@ -226,12 +198,7 @@ vk_android_import_anb_memory(struct vk_device *device,
 {
    assert(anb && anb->handle && anb->handle->numFds > 0);
 
-   int dma_buf_fd = vk_android_find_anb_dma_buf_fd(anb->handle);
-   if (dma_buf_fd < 0) {
-      mesa_loge("Android native buffer has no seekable dma-buf fd");
-      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
-   }
-
+   int dma_buf_fd = anb->handle->data[0];
    /* Query image memory requirements for size and supported memory types */
    VkMemoryRequirements mem_reqs;
    device->dispatch_table.GetImageMemoryRequirements(
