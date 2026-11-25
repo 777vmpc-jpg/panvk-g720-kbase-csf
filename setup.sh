@@ -3,7 +3,12 @@ set -euo pipefail
 
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/27.0.12077973}"
 export MESON_WORKING_DIR="$PWD"
-export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+NDK_SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+# Bindgen usa uma variavel especifica para o target e pode nao aplicar a generica.
+# Forca os headers Android para evitar que libclang caia nos headers glibc do runner.
+export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$NDK_SYSROOT -isystem $NDK_SYSROOT/usr/include -isystem $NDK_SYSROOT/usr/include/aarch64-linux-android"
+export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="$BINDGEN_EXTRA_CLANG_ARGS"
+export BINDGEN_EXTRA_CLANG_ARGS_AARCH64_LINUX_ANDROID="$BINDGEN_EXTRA_CLANG_ARGS"
 
 if [[ ! -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" ]]; then
   echo "NDK nao encontrado ou incompleto: $ANDROID_NDK_HOME" >&2
