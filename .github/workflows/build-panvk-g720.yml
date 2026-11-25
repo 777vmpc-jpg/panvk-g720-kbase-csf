@@ -252,6 +252,11 @@ jobs:
           set -euo pipefail
           cp output-heap.txt output/HEAP-SETTINGS.txt
 
+          # NOTICE da mesma base Mesa 26.3.0-devel usada neste build.
+          curl --fail --location --retry 3 "https://raw.githubusercontent.com/JimVulkan/mali-panvk/8be23f2f62b70cf9a7449bfa7ace7f1dba769c9f/android/NOTICE.txt" -o output/NOTICE.txt
+          test -s output/NOTICE.txt
+          grep -q "26.3.0-devel" output/NOTICE.txt
+
           python3 - <<'PY'
           import json, os
           meta = {
@@ -275,11 +280,11 @@ jobs:
           import json, zipfile
           p = "output/PanVK-G720-MC7-ARM64.zip"
           with zipfile.ZipFile(p, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-              for name in ("meta.json", "libvulkan_panfrost.so", "BUILD-INFO.txt", "HEAP-SETTINGS.txt"):
+              for name in ("meta.json", "libvulkan_panfrost.so", "BUILD-INFO.txt", "HEAP-SETTINGS.txt", "NOTICE.txt"):
                   z.write("output/" + name, arcname=name)
           with zipfile.ZipFile(p) as z:
               names = set(z.namelist())
-              required = {"meta.json", "libvulkan_panfrost.so"}
+              required = {"meta.json", "libvulkan_panfrost.so", "NOTICE.txt"}
               if not required.issubset(names):
                   raise SystemExit("Pacote sem arquivos obrigatorios: " + repr(required - names))
               meta = json.loads(z.read("meta.json"))
