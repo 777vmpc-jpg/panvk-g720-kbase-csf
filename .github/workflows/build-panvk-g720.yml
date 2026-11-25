@@ -227,10 +227,10 @@ jobs:
           file output/libvulkan_panfrost.so
           "$READelf" -d output/libvulkan_panfrost.so | tee output/ELF-DEPENDENCIES.txt
           python3 - <<'PY'
-          import re, subprocess, os
+          import subprocess, os
           readelf = os.environ["ANDROID_NDK_HOME"] + "/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           output = subprocess.check_output([readelf, "-d", "output/libvulkan_panfrost.so"], text=True)
-          needed = re.findall(r"Shared library: \\[([^]]+)\\]", output)
+          needed = [line.split("[", 1)[1].split("]", 1)[0] for line in output.splitlines() if "(NEEDED)" in line and "[" in line and "]" in line]
           forbidden = [name for name in needed if name == "libdrm.so" or name.startswith(("libX11", "libxcb", "libXrandr", "libXext", "libXfixes"))]
           if forbidden:
               raise SystemExit("Dependencias externas proibidas no ELF Android: " + ", ".join(forbidden))
