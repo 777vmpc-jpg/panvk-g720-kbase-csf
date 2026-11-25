@@ -422,8 +422,14 @@ vk_stage_to_timestamp_subqueue_mask(VkPipelineStageFlags2 vk_stage)
    if (vk_stage)
       result |= vk_stages_to_subqueue_mask(vk_stage, SYNC_SCOPE_FIRST);
 
-   /* All stages should map to at least one subqueue. */
-   assert(util_bitcount(result) > 0);
+   /*
+    * Some applications pass aggregate or extension stage bits that this
+    * PanVK version does not map explicitly. Do not abort the process: use
+    * every subqueue as a conservative timestamp scope so the query remains
+    * valid across the whole command stream.
+    */
+   if (result == 0)
+      result = BITFIELD_MASK(PANVK_SUBQUEUE_COUNT);
 
    return result;
 }
