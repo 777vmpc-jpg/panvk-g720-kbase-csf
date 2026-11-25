@@ -199,7 +199,6 @@ vk_android_import_anb_memory(struct vk_device *device,
    assert(anb && anb->handle && anb->handle->numFds > 0);
 
    int dma_buf_fd = anb->handle->data[0];
-
    /* Query image memory requirements for size and supported memory types */
    VkMemoryRequirements mem_reqs;
    device->dispatch_table.GetImageMemoryRequirements(

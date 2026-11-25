@@ -2,9 +2,13 @@ name: Build PanVK Mali G720 MC7 ARM64
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - g720-development
   push:
     branches:
-      - main
+      - g720-development
+      - auto-build-mc7-v1.1.9f
 
 permissions:
   contents: read
@@ -32,6 +36,7 @@ jobs:
             clang llvm llvm-dev lld \
             libclang-dev \
             libclc-18 libclc-18-dev \
+            libllvmspirvlib-18-dev \
             libdrm-dev libelf-dev \
             libexpat1-dev libzstd-dev zlib1g-dev \
             libwayland-dev wayland-protocols \
@@ -167,50 +172,16 @@ jobs:
             exit 1
           fi
 
-      - name: Aplicar ajustes de heap MC7
+      - name: Auditar parametros de heap MC7 sem alterar o codigo
         shell: bash
         run: |
           set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-
-          path = Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c")
-          source = path.read_text()
-
-          interval_old = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 128"
-          interval_new = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256"
-
-          if interval_old in source:
-              source = source.replace(interval_old, interval_new, 1)
-              print("Aplicado:", interval_new)
-          elif interval_new in source:
-              print("Ja aplicado:", interval_new)
-          else:
-              raise SystemExit(
-                  "Nao foi possivel localizar a definicao de INTERVAL"
-              )
-
-          work_old = "#define KBASE_TILER_HEAP_RENEW_WORK 65536"
-          work_new = "#define KBASE_TILER_HEAP_RENEW_WORK 131072"
-
-          if work_old in source:
-              source = source.replace(work_old, work_new, 1)
-              work_status = "131072 (aplicado)"
-              print("Aplicado:", work_new)
-          elif work_new in source:
-              work_status = "131072 (ja aplicado)"
-              print("Ja aplicado:", work_new)
-          else:
-              work_status = "Nao aplicado - macro ausente no codigo-fonte"
-              print("Aviso: macro WORK nao encontrada; seguindo sem altera-la")
-
-          path.write_text(source)
-
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
-          PY
+          SOURCE="src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c"
+          grep -E '^#define KBASE_TILER_HEAP_RENEW_(INTERVAL|WORK) ' "$SOURCE" | tee output-heap.txt
+          INTERVAL="$(awk '/KBASE_TILER_HEAP_RENEW_INTERVAL / {print $3}' "$SOURCE")"
+          WORK="$(awk '/KBASE_TILER_HEAP_RENEW_WORK / {print $3}' "$SOURCE")"
+          echo "HEAP_RENEW_INTERVAL=$INTERVAL" >> "$GITHUB_ENV"
+          echo "HEAP_RENEW_WORK=$WORK" >> "$GITHUB_ENV"
 
       - name: Preparar script de compilacao
         shell: bash
@@ -227,7 +198,7 @@ jobs:
 
           meson compile -C build
 
-      - name: Localizar biblioteca compilada
+      - name: Localizar e preparar biblioteca compilada
         shell: bash
         run: |
           set -euo pipefail
@@ -244,29 +215,101 @@ jobs:
           mkdir -p output
           cp "$LIB" output/libvulkan_panfrost.so
 
-          file output/libvulkan_panfrost.so
-          sha256sum output/libvulkan_panfrost.so
+          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          READelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$STRIP" --strip-unneeded output/libvulkan_panfrost.so
 
-          echo "Biblioteca compilada: $LIB"
+          if "$READelf" -S output/libvulkan_panfrost.so | grep -Eq '\.debug|\.symtab'; then
+            echo "A biblioteca ainda contem secoes de debug/simbolos."
+            exit 1
+          fi
+
+          file output/libvulkan_panfrost.so
+          "$READelf" -d output/libvulkan_panfrost.so | tee output/ELF-DEPENDENCIES.txt
+          python3 - <<'PY'
+          import subprocess, os
+          readelf = os.environ["ANDROID_NDK_HOME"] + "/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          output = subprocess.check_output([readelf, "-d", "output/libvulkan_panfrost.so"], text=True)
+          needed = [line.split("[", 1)[1].split("]", 1)[0] for line in output.splitlines() if "(NEEDED)" in line and "[" in line and "]" in line]
+          forbidden = [name for name in needed if name == "libdrm.so" or name.startswith(("libX11", "libxcb", "libXrandr", "libXext", "libXfixes"))]
+          if forbidden:
+              raise SystemExit("Dependencias externas proibidas no ELF Android: " + ", ".join(forbidden))
+          print("Auditoria ELF aprovada. Dependencias:", ", ".join(needed))
+          PY
+          sha256sum output/libvulkan_panfrost.so
+          echo "Biblioteca compilada e preparada: $LIB"
 
       - name: Gerar informacoes do build
         run: |
           {
             echo "PanVK Mali G720 MC7"
             echo "Arquitetura: ARM64"
-            echo "Android API: 30"
+            echo "Android API: 31"
             echo "NDK: 27.0.12077973"
-            echo "Heap renew interval: 256"
-            echo "Heap renew work: $HEAP_RENEW_WORK_STATUS"
+            echo "Heap renew interval: $HEAP_RENEW_INTERVAL"
+            echo "Heap renew work: $HEAP_RENEW_WORK"
             echo ""
             echo "SHA256:"
             sha256sum output/libvulkan_panfrost.so
           } > output/BUILD-INFO.txt
 
+
+      - name: Gerar manifesto e empacotar driver Android
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          COMMIT_SHORT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cp output-heap.txt output/HEAP-SETTINGS.txt
+
+          # NOTICE da mesma base Mesa 26.3.0-devel usada neste build.
+          curl --fail --location --retry 3 "https://raw.githubusercontent.com/JimVulkan/mali-panvk/8be23f2f62b70cf9a7449bfa7ace7f1dba769c9f/android/NOTICE.txt" -o output/NOTICE.txt
+          test -s output/NOTICE.txt
+          grep -q "26.3.0-devel" output/NOTICE.txt
+
+          python3 - <<'PY'
+          import json, os
+          meta = {
+              "schemaVersion": 1,
+              "name": f"PanVK G720 MC7 experimental Mesa 26.3.0-devel build {os.environ['BUILD_NUMBER']}",
+              "description": "PanVK experimental para Mali-G720 MC7, Android ARM64, baseado em Mesa 26.3.0-devel. Build de teste; compatibilidade em runtime ainda nao validada.",
+              "author": "777vmpc-jpg",
+              "packageVersion": str(os.environ["BUILD_NUMBER"]),
+              "vendor": "Mesa",
+              "driverVersion": "Experimental",
+              "minApi": 31,
+              "libraryName": "libvulkan_panfrost.so"
+          }
+          with open("output/meta.json", "w", encoding="utf-8") as f:
+              json.dump(meta, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+          PY
+
+          python3 -m json.tool output/meta.json >/dev/null
+          python3 - <<'PY'
+          import json, zipfile
+          p = "output/PanVK-G720-MC7-ARM64.zip"
+          with zipfile.ZipFile(p, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for name in ("meta.json", "libvulkan_panfrost.so", "BUILD-INFO.txt", "HEAP-SETTINGS.txt", "NOTICE.txt"):
+                  z.write("output/" + name, arcname=name)
+          with zipfile.ZipFile(p) as z:
+              names = set(z.namelist())
+              required = {"meta.json", "libvulkan_panfrost.so", "NOTICE.txt"}
+              if not required.issubset(names):
+                  raise SystemExit("Pacote sem arquivos obrigatorios: " + repr(required - names))
+              meta = json.loads(z.read("meta.json"))
+              if meta.get("libraryName") not in names:
+                  raise SystemExit("libraryName do meta.json nao existe no ZIP")
+          PY
+
+          unzip -l output/PanVK-G720-MC7-ARM64.zip
+          sha256sum output/PanVK-G720-MC7-ARM64.zip
+
       - name: Publicar biblioteca compilada
         uses: actions/upload-artifact@v4
         with:
           name: PanVK-MC7-ARM64
-          path: output/
+          path: output/PanVK-G720-MC7-ARM64.zip
           if-no-files-found: error
           retention-days: 30
