@@ -306,10 +306,15 @@ jobs:
           unzip -l output/PanVK-G720-MC7-ARM64.zip
           sha256sum output/PanVK-G720-MC7-ARM64.zip
 
-      - name: Publicar biblioteca compilada
+      - name: Publicar pacote importavel (meta.json na raiz do ZIP)
         uses: actions/upload-artifact@v4
         with:
           name: PanVK-MC7-ARM64
-          path: output/PanVK-G720-MC7-ARM64.zip
+          path: |
+            output/meta.json
+            output/libvulkan_panfrost.so
+            output/BUILD-INFO.txt
+            output/HEAP-SETTINGS.txt
+            output/NOTICE.txt
           if-no-files-found: error
           retention-days: 30
