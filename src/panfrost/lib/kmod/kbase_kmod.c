@@ -1669,10 +1669,14 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       goto err_free_bo;
    }
 
+   /* Match the UMM import flags used by working kbase userspace:
+    * CPU/GPU read-write plus SAME_VA.  IMPORT_SHARED and
+    * COHERENT_SYSTEM are not valid substitutes for these access flags and
+    * can make vendor kbase reject Android gralloc buffers with -ENOMEM. */
    uint64_t import_flags =
       BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
       BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR |
-      BASE_MEM_IMPORT_SHARED | BASE_MEM_COHERENT_SYSTEM;
+      BASE_MEM_SAME_VA;
 
    if (kmod_flags & PAN_KMOD_BO_FLAG_GPU_UNCACHED)
       import_flags |= BASE_MEM_UNCACHED_GPU;
