@@ -110,7 +110,7 @@ envsubst < android.toml > /tmp/android_wrapper.toml
 
 MESON_ARGS=(
   --cross-file /tmp/android_wrapper.toml
-  -Dbuildtype=debug
+  -Dbuildtype=release
   -Dplatforms=android
   -Dandroid-stub=true
   -Dandroid-libbacktrace=disabled
