@@ -219,7 +219,7 @@ jobs:
           READelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           "$STRIP" --strip-unneeded output/libvulkan_panfrost.so
 
-          if "$READelf" -S output/libvulkan_panfrost.so | grep -Eq '\\.debug|\\.symtab'; then
+          if "$READelf" -S output/libvulkan_panfrost.so | grep -Eq '\.debug|\.symtab'; then
             echo "A biblioteca ainda contem secoes de debug/simbolos."
             exit 1
           fi
@@ -267,7 +267,7 @@ jobs:
           }
           with open("output/meta.json", "w", encoding="utf-8") as f:
               json.dump(meta, f, indent=2, ensure_ascii=False)
-              f.write("\\n")
+              f.write("\n")
           PY
 
           python3 -m json.tool output/meta.json >/dev/null
