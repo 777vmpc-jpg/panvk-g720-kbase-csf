@@ -198,20 +198,64 @@ vk_android_import_anb_memory(struct vk_device *device,
 {
    assert(anb && anb->handle && anb->handle->numFds > 0);
 
-   int dma_buf_fd = anb->handle->data[0];
+   /*
+    * Native gralloc handles may put auxiliary descriptors (for example
+    * anon_inode:gralloc_extra0) before the actual dma-buf. Never assume FD[0]
+    * is importable: identify dma-bufs by their kernel fd link and validate
+    * each candidate with GetMemoryFdPropertiesKHR.
+    */
+   int dma_buf_fd = -1;
+   VkMemoryFdPropertiesKHR fd_props = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+   };
+   VkResult result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+   for (int i = 0; i < anb->handle->numFds; i++) {
+      const int candidate_fd = anb->handle->data[i];
+      char fd_path[64], fd_target[160] = {0};
+
+      if (candidate_fd < 0)
+         continue;
+
+      int path_len = snprintf(fd_path, sizeof(fd_path),
+                              "/proc/self/fd/%d", candidate_fd);
+      if (path_len <= 0 || (size_t)path_len >= sizeof(fd_path))
+         continue;
+
+      ssize_t target_len = readlink(fd_path, fd_target,
+                                    sizeof(fd_target) - 1);
+      if (target_len < 0)
+         continue;
+      fd_target[target_len] = '\\0';
+
+      mesa_logi("vk_android_import_anb_memory: native FD[%d]=%d target=%s",
+                i, candidate_fd, fd_target);
+
+      if (strstr(fd_target, "dmabuf") == NULL &&
+          strstr(fd_target, "dma_buf") == NULL)
+         continue;
+
+      result = device->dispatch_table.GetMemoryFdPropertiesKHR(
+         (VkDevice)device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+         candidate_fd, &fd_props);
+      mesa_logi("vk_android_import_anb_memory: DMA-BUF candidate FD[%d]=%d properties=%d",
+                i, candidate_fd, result);
+      if (result == VK_SUCCESS) {
+         dma_buf_fd = candidate_fd;
+         break;
+      }
+   }
+
+   if (dma_buf_fd < 0) {
+      mesa_loge("vk_android_import_anb_memory: no importable DMA-BUF in native handle (%d FDs)",
+                anb->handle->numFds);
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+
    /* Query image memory requirements for size and supported memory types */
    VkMemoryRequirements mem_reqs;
    device->dispatch_table.GetImageMemoryRequirements(
       (VkDevice)device, (VkImage)image, &mem_reqs);
-
-   VkMemoryFdPropertiesKHR fd_props = {
-      .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
-   };
-   VkResult result = device->dispatch_table.GetMemoryFdPropertiesKHR(
-      (VkDevice)device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-      dma_buf_fd, &fd_props);
-   if (result != VK_SUCCESS)
-      return result;
 
    uint32_t compatible_types = mem_reqs.memoryTypeBits & fd_props.memoryTypeBits;
    if (!compatible_types)
