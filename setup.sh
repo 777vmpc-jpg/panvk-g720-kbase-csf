@@ -20,7 +20,7 @@ meson setup build-host \
   -Dinstall-mesa-clc=true \
   -Dprecomp-compiler=enabled \
   -Dinstall-precomp-compiler=true \
-  -Dllvm=disabled
+  -Dllvm=enabled
 
 ninja -C build-host \
   src/compiler/clc/mesa_clc \
