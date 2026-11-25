@@ -111,12 +111,15 @@ if [[ ! -f android.toml ]]; then
   echo "Arquivo android.toml nao encontrado na raiz do repositorio" >&2
   exit 1
 fi
+# Isola o pkg-config Android das bibliotecas instaladas no host.
+unset PKG_CONFIG_PATH
+
 envsubst < android.toml > /tmp/android_wrapper.toml
 
 MESON_ARGS=(
   --cross-file /tmp/android_wrapper.toml
   -Dbuildtype=debug
-  -Dplatforms=android,x11
+  -Dplatforms=android
   -Dandroid-stub=true
   -Dandroid-libbacktrace=disabled
   -Dplatform-sdk-version=30
