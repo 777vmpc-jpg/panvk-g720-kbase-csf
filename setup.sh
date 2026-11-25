@@ -13,6 +13,13 @@ fi
 # Estas opcoes seguem a configuracao documentada pelo Mesa para cross-builds Panfrost.
 rm -rf build-host
 meson setup build-host \
+  -Dplatforms=x11 \
+  -Dglx=disabled \
+  -Degl=disabled \
+  -Dgbm=disabled \
+  -Dopengl=false \
+  -Dgles1=disabled \
+  -Dgles2=disabled \
   -Dtools=panfrost \
   -Dgallium-drivers=panfrost \
   -Dvulkan-drivers= \
