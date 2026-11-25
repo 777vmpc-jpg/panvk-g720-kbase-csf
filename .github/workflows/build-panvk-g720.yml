@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - g720-development
+      - auto-build-mc7-v1.1.9f
 
 permissions:
   contents: read
@@ -167,50 +168,16 @@ jobs:
             exit 1
           fi
 
-      - name: Aplicar ajustes de heap MC7
+      - name: Auditar parametros de heap MC7 sem alterar o codigo
         shell: bash
         run: |
           set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-
-          path = Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c")
-          source = path.read_text()
-
-          interval_old = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 128"
-          interval_new = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256"
-
-          if interval_old in source:
-              source = source.replace(interval_old, interval_new, 1)
-              print("Aplicado:", interval_new)
-          elif interval_new in source:
-              print("Ja aplicado:", interval_new)
-          else:
-              raise SystemExit(
-                  "Nao foi possivel localizar a definicao de INTERVAL"
-              )
-
-          work_old = "#define KBASE_TILER_HEAP_RENEW_WORK 65536"
-          work_new = "#define KBASE_TILER_HEAP_RENEW_WORK 131072"
-
-          if work_old in source:
-              source = source.replace(work_old, work_new, 1)
-              work_status = "131072 (aplicado)"
-              print("Aplicado:", work_new)
-          elif work_new in source:
-              work_status = "131072 (ja aplicado)"
-              print("Ja aplicado:", work_new)
-          else:
-              work_status = "Nao aplicado - macro ausente no codigo-fonte"
-              print("Aviso: macro WORK nao encontrada; seguindo sem altera-la")
-
-          path.write_text(source)
-
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
-          PY
+          SOURCE="src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c"
+          grep -E '^#define KBASE_TILER_HEAP_RENEW_(INTERVAL|WORK) ' "$SOURCE" | tee output-heap.txt
+          INTERVAL="$(awk '/KBASE_TILER_HEAP_RENEW_INTERVAL / {print $3}' "$SOURCE")"
+          WORK="$(awk '/KBASE_TILER_HEAP_RENEW_WORK / {print $3}' "$SOURCE")"
+          echo "HEAP_RENEW_INTERVAL=$INTERVAL" >> "$GITHUB_ENV"
+          echo "HEAP_RENEW_WORK=$WORK" >> "$GITHUB_ENV"
 
       - name: Preparar script de compilacao
         shell: bash
@@ -249,6 +216,14 @@ jobs:
 
           echo "Biblioteca compilada: $LIB"
 
+      - name: Empacotar ZIP de teste MC7
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp output-heap.txt output/HEAP-SETTINGS.txt
+          (cd output && zip -9 PanVK-G720-MC7-ARM64.zip libvulkan_panfrost.so BUILD-INFO.txt HEAP-SETTINGS.txt)
+          sha256sum output/PanVK-G720-MC7-ARM64.zip
+
       - name: Gerar informacoes do build
         run: |
           {
@@ -256,8 +231,8 @@ jobs:
             echo "Arquitetura: ARM64"
             echo "Android API: 30"
             echo "NDK: 27.0.12077973"
-            echo "Heap renew interval: 256"
-            echo "Heap renew work: $HEAP_RENEW_WORK_STATUS"
+            echo "Heap renew interval: $HEAP_RENEW_INTERVAL"
+            echo "Heap renew work: $HEAP_RENEW_WORK"
             echo ""
             echo "SHA256:"
             sha256sum output/libvulkan_panfrost.so
@@ -267,6 +242,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PanVK-MC7-ARM64
-          path: output/
+          path: output/PanVK-G720-MC7-ARM64.zip
           if-no-files-found: error
           retention-days: 30
