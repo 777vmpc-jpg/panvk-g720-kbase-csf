@@ -14,6 +14,7 @@ fi
 rm -rf build-host
 meson setup build-host \
   -Dtools=panfrost \
+  -Dgallium-drivers=panfrost \
   -Dmesa-clc=enabled \
   -Dinstall-mesa-clc=true \
   -Dprecomp-compiler=enabled \
