@@ -5,8 +5,8 @@ ndk_bin = ndk_home / 'toolchains/llvm/prebuilt/linux-x86_64/bin'
 ndk_sysroot = ndk_home / 'toolchains/llvm/prebuilt/linux-x86_64/sysroot'
 
 [binaries]
-c = [ndk_bin / 'aarch64-linux-android30-clang', '-D__TERMUX__']
-cpp = [ndk_bin / 'aarch64-linux-android30-clang++',
+c = [ndk_bin / 'aarch64-linux-android31-clang', '-D__TERMUX__']
+cpp = [ndk_bin / 'aarch64-linux-android31-clang++',
         '-fno-exceptions',
         '--start-no-unused-arguments',
         # '-static-libstdc++', # gralloc 4/5 needs to use std::__1::string/vector from libc++
