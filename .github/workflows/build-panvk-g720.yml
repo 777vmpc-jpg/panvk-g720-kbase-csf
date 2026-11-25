@@ -11,6 +11,7 @@ on:
       - auto-build-mc7-v1.1.9f
       - fix-kbase-dmabuf-size-import
       - fix-panvk-vertex-buffer-range-guard
+      - panvk-mc7-build144-performance
 
 permissions:
   contents: read
@@ -49,6 +50,8 @@ jobs:
             libxcb-dri3-dev libxcb-present-dev \
             libxcb-shm0-dev libxcb-sync-dev \
             libxcb-xfixes0-dev libxshmfence-dev \
+            libwayland-egl-backend-dev \
+            libxcb-glx0-dev libxcb-keysyms1-dev libxxf86vm-dev \
             libvulkan-dev libxml2-dev \
             libffi-dev libssl-dev \
             libedit-dev libncurses-dev \
