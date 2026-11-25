@@ -233,7 +233,7 @@ jobs:
           {
             echo "PanVK Mali G720 MC7"
             echo "Arquitetura: ARM64"
-            echo "Android API: 30"
+            echo "Android API: 31"
             echo "NDK: 27.0.12077973"
             echo "Heap renew interval: $HEAP_RENEW_INTERVAL"
             echo "Heap renew work: $HEAP_RENEW_WORK"
