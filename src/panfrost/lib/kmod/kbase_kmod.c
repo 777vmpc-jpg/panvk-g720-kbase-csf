@@ -41,7 +41,9 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <poll.h>
+#include <stdio.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "util/macros.h"
@@ -1684,6 +1686,34 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       import_flags |= BASE_MEM_CACHED_CPU;
 
    int import_fd = kbase_bo->dmabuf_fd;
+
+   /*
+    * Kbase reports -ENOMEM for several distinct UMM failures, including
+    * dma_buf_get(), dma_buf_attach(), VA-region allocation and GPU mapping.
+    * Capture the exported fd identity before the ioctl so Android gralloc
+    * handles can be distinguished from valid dma-buf descriptors.
+    */
+   struct stat fd_stat;
+   char fd_path[64], fd_target[160] = {0};
+   int fd_path_len = snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d",
+                              import_fd);
+   ssize_t fd_target_len = -1;
+   if (fd_path_len > 0 && (size_t)fd_path_len < sizeof(fd_path))
+      fd_target_len = readlink(fd_path, fd_target, sizeof(fd_target) - 1);
+   if (fd_target_len >= 0)
+      fd_target[fd_target_len] = '\\0';
+
+   if (fstat(import_fd, &fd_stat) == 0) {
+      mesa_logi("kbase: UMM fd identity: fd=%d mode=0%o dev=%" PRIuMAX
+                " ino=%" PRIuMAX " size=%" PRIdMAX " link=%s",
+                import_fd, (unsigned int)fd_stat.st_mode,
+                (uintmax_t)fd_stat.st_dev, (uintmax_t)fd_stat.st_ino,
+                (intmax_t)fd_stat.st_size,
+                fd_target_len >= 0 ? fd_target : "(unavailable)");
+   } else {
+      mesa_loge("kbase: UMM fd fstat failed: fd=%d errno=%d (%s)",
+                import_fd, errno, strerror(errno));
+   }
    union kbase_ioctl_mem_import_40 req = {
       .in = {
          .flags = import_flags,
