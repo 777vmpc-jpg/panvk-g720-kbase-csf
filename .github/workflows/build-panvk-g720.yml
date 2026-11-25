@@ -225,6 +225,11 @@ jobs:
           fi
 
           file output/libvulkan_panfrost.so
+          "$READelf" -d output/libvulkan_panfrost.so | tee output/ELF-DEPENDENCIES.txt
+          if "$READelf" -d output/libvulkan_panfrost.so | grep -Eq 'Shared library: \\[(libdrm|libX11|libxcb|libXrandr|libXext|libXfixes)[^]]*\\]'; then
+            echo "Dependencia externa proibida detectada no ELF Android."
+            exit 1
+          fi
           sha256sum output/libvulkan_panfrost.so
           echo "Biblioteca compilada e preparada: $LIB"
 
