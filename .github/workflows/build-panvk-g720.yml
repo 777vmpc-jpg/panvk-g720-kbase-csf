@@ -219,14 +219,6 @@ jobs:
 
           echo "Biblioteca compilada: $LIB"
 
-      - name: Empacotar ZIP de teste MC7
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp output-heap.txt output/HEAP-SETTINGS.txt
-          (cd output && zip -9 PanVK-G720-MC7-ARM64.zip libvulkan_panfrost.so BUILD-INFO.txt HEAP-SETTINGS.txt)
-          sha256sum output/PanVK-G720-MC7-ARM64.zip
-
       - name: Gerar informacoes do build
         run: |
           {
@@ -240,6 +232,15 @@ jobs:
             echo "SHA256:"
             sha256sum output/libvulkan_panfrost.so
           } > output/BUILD-INFO.txt
+
+
+      - name: Empacotar ZIP de teste MC7
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp output-heap.txt output/HEAP-SETTINGS.txt
+          (cd output && zip -9 PanVK-G720-MC7-ARM64.zip libvulkan_panfrost.so BUILD-INFO.txt HEAP-SETTINGS.txt)
+          sha256sum output/PanVK-G720-MC7-ARM64.zip
 
       - name: Publicar biblioteca compilada
         uses: actions/upload-artifact@v4
