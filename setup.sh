@@ -131,6 +131,7 @@ MESON_ARGS=(
   -Dllvm=disabled
   -Dstrip=false
   -Dpanfrost-kmds=kbase,panthor
+  -Dpanfrost-rust=true
 )
 
 if [[ -d build ]]; then
