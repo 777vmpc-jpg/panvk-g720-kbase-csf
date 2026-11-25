@@ -199,11 +199,16 @@ pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
    simple_mtx_lock(&dev->handle_to_bo.lock);
 
    if (dev->ops->bo_import_fd) {
-      size_t size = lseek(fd, 0, SEEK_END);
-      if (size == 0 || size == (size_t)-1) {
-         mesa_loge("invalid dmabuf size");
-         goto err_unlock;
-      }
+      off_t end = lseek(fd, 0, SEEK_END);
+      size_t size = (end > 0) ? (size_t)end : 0;
+
+      /*
+       * Some Android dma-bufs do not report their size through lseek().
+       * The Kbase import backend obtains the authoritative allocation size
+       * from KBASE_IOCTL_MEM_IMPORT, so allow it to handle size == 0.
+       */
+      if (size == 0)
+         mesa_logi("dma-buf size unavailable via lseek; deferring size query to import backend");
 
       bo = dev->ops->bo_import_fd(dev, fd, size);
       if (!bo)
