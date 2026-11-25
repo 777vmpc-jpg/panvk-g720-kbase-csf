@@ -1,0 +1,28 @@
+name: Fetch original PanVK ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download original ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download 0.1.0-beta.2 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "panvk_faux123_v1_1_9_g720_mc7_F.zip" \
+            --dir original
+          sha256sum original/*.zip
+
+      - name: Upload original ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: panvk-original-release-zip
+          path: original/panvk_faux123_v1_1_9_g720_mc7_F.zip
+          retention-days: 7
