@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - panvk-mc7-release-clean
 
 permissions:
   contents: read
