@@ -1,0 +1,37 @@
+name: Fetch PanVK 1.1.9 RC10 ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - g720-development
+    paths:
+      - .github/workflows/fetch-1.1.9-rc10.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download PanVK 1.1.9 RC10 release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p incoming
+          gh release download 1.1.9 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "panvk_faux123_universal_v1.1.9-rc10.adpkg.zip" \
+            --dir incoming
+          echo "Downloaded asset:"
+          ls -lh incoming/
+          sha256sum incoming/*.zip
+
+      - name: Upload ZIP for audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: panvk-1.1.9-rc10-audit
+          path: incoming/panvk_faux123_universal_v1.1.9-rc10.adpkg.zip
+          if-no-files-found: error
+          retention-days: 7
