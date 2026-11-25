@@ -133,6 +133,7 @@ MESON_ARGS=(
   -Dstrip=false
   -Dpanfrost-kmds=kbase,panthor
   -Dpanfrost-rust=false
+  -Dallow-fallback-for=libdrm \
   --force-fallback-for=libdrm,zlib,expat
   -Dlibdrm:default_library=static
   -Dzlib:default_library=static
