@@ -10,6 +10,7 @@ on:
       - g720-development
       - auto-build-mc7-v1.1.9f
       - fix-kbase-dmabuf-size-import
+      - fix-panvk-vertex-buffer-range-guard
 
 permissions:
   contents: read
