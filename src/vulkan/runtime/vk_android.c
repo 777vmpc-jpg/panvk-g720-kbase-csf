@@ -50,6 +50,7 @@
 #include <vndk/hardware_buffer.h>
 #endif
 
+#include <stdio.h>
 #include <unistd.h>
 
 static struct u_gralloc *_gralloc;
@@ -226,7 +227,7 @@ vk_android_import_anb_memory(struct vk_device *device,
                                     sizeof(fd_target) - 1);
       if (target_len < 0)
          continue;
-      fd_target[target_len] = '\\0';
+      fd_target[target_len] = '\0';
 
       mesa_logi("vk_android_import_anb_memory: native FD[%d]=%d target=%s",
                 i, candidate_fd, fd_target);
