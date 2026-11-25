@@ -1131,7 +1131,10 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_cumulative_coverage_pan:
    case nir_intrinsic_load_blend_input_pan:
    case nir_intrinsic_load_idvs_output_buf_index_pan:
-   /* Geometry-stage parameter buffer address is conservatively divergent. */
+   /* Geometry-stage parameter buffer and pipeline-stat query addresses are
+    * conservatively divergent until their per-invocation behavior is modeled.
+    */
+   case nir_intrinsic_load_stat_query_address_poly:
    case nir_intrinsic_load_geometry_param_buffer_poly:
    case nir_intrinsic_atest_pan:
    case nir_intrinsic_zs_emit_pan:
