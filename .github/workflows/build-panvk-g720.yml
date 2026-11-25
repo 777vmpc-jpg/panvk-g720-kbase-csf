@@ -198,7 +198,7 @@ jobs:
 
           meson compile -C build
 
-      - name: Localizar biblioteca compilada
+      - name: Localizar e preparar biblioteca compilada
         shell: bash
         run: |
           set -euo pipefail
@@ -215,10 +215,18 @@ jobs:
           mkdir -p output
           cp "$LIB" output/libvulkan_panfrost.so
 
+          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          READelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$STRIP" --strip-unneeded output/libvulkan_panfrost.so
+
+          if "$READelf" -S output/libvulkan_panfrost.so | grep -Eq '\\.debug|\\.symtab'; then
+            echo "A biblioteca ainda contem secoes de debug/simbolos."
+            exit 1
+          fi
+
           file output/libvulkan_panfrost.so
           sha256sum output/libvulkan_panfrost.so
-
-          echo "Biblioteca compilada: $LIB"
+          echo "Biblioteca compilada e preparada: $LIB"
 
       - name: Gerar informacoes do build
         run: |
@@ -235,12 +243,51 @@ jobs:
           } > output/BUILD-INFO.txt
 
 
-      - name: Empacotar ZIP de teste MC7
+      - name: Gerar manifesto e empacotar driver Android
         shell: bash
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          COMMIT_SHORT: ${{ github.sha }}
         run: |
           set -euo pipefail
           cp output-heap.txt output/HEAP-SETTINGS.txt
-          (cd output && zip -9 PanVK-G720-MC7-ARM64.zip libvulkan_panfrost.so BUILD-INFO.txt HEAP-SETTINGS.txt)
+
+          python3 - <<'PY'
+          import json, os
+          meta = {
+              "schemaVersion": 1,
+              "name": f"PanVK G720 MC7 experimental Mesa 26.3.0-devel build {os.environ['BUILD_NUMBER']}",
+              "description": "PanVK experimental para Mali-G720 MC7, Android ARM64, baseado em Mesa 26.3.0-devel. Build de teste; compatibilidade em runtime ainda nao validada.",
+              "author": "777vmpc-jpg",
+              "packageVersion": str(os.environ["BUILD_NUMBER"]),
+              "vendor": "Mesa",
+              "driverVersion": "Experimental",
+              "minApi": 31,
+              "libraryName": "libvulkan_panfrost.so"
+          }
+          with open("output/meta.json", "w", encoding="utf-8") as f:
+              json.dump(meta, f, indent=2, ensure_ascii=False)
+              f.write("\\n")
+          PY
+
+          python3 -m json.tool output/meta.json >/dev/null
+          python3 - <<'PY'
+          import json, zipfile
+          p = "output/PanVK-G720-MC7-ARM64.zip"
+          with zipfile.ZipFile(p, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for name in ("meta.json", "libvulkan_panfrost.so", "BUILD-INFO.txt", "HEAP-SETTINGS.txt"):
+                  z.write("output/" + name, arcname=name)
+          with zipfile.ZipFile(p) as z:
+              names = set(z.namelist())
+              required = {"meta.json", "libvulkan_panfrost.so"}
+              if not required.issubset(names):
+                  raise SystemExit("Pacote sem arquivos obrigatorios: " + repr(required - names))
+              meta = json.loads(z.read("meta.json"))
+              if meta.get("libraryName") not in names:
+                  raise SystemExit("libraryName do meta.json nao existe no ZIP")
+          PY
+
+          unzip -l output/PanVK-G720-MC7-ARM64.zip
           sha256sum output/PanVK-G720-MC7-ARM64.zip
 
       - name: Publicar biblioteca compilada
