@@ -14,6 +14,7 @@ cpp = [ndk_bin / 'aarch64-linux-android30-clang++',
         '-D__TERMUX__']
 ar = ndk_bin / 'llvm-ar'
 strip = ndk_bin / 'llvm-strip'
+rust = ['rustc', '--target=aarch64-linux-android']
 pkg-config = '/usr/bin/pkg-config'
 
 [host_machine]
