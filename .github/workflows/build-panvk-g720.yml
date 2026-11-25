@@ -2,6 +2,9 @@ name: Build PanVK Mali G720 MC7 ARM64
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - g720-development
   push:
     branches:
       - g720-development
