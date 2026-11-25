@@ -73,14 +73,6 @@ Libs: -lXrandr
 Cflags:
 PC
 
-cat > shims/libdrm.pc <<'PC'
-Name: libdrm
-Description: libdrm
-Version: 2.5
-Libs: -ldrm
-Cflags:
-PC
-
 cat > shims/libx11-xcb.pc <<'PC'
 Name: libx11-xcb
 Description: libx11-xcb
@@ -141,6 +133,10 @@ MESON_ARGS=(
   -Dstrip=false
   -Dpanfrost-kmds=kbase,panthor
   -Dpanfrost-rust=false
+  --force-fallback-for=libdrm,zlib,expat
+  -Dlibdrm:default_library=static
+  -Dzlib:default_library=static
+  -Dexpat:default_library=static
 )
 
 if [[ -d build ]]; then
