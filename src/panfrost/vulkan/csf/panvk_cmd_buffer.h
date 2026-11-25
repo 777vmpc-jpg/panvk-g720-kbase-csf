@@ -32,7 +32,8 @@ struct panvk_sync_scope {
    VkAccessFlags2 access;
 };
 
-#define MAX_VBS 16
+/* 16 hardware bindings plus one internal compatibility buffer slot. */
+#define MAX_VBS 17
 #define MAX_RTS 8
 #if PAN_ARCH >= 14
 #define MAX_LAYERS_PER_TILER_DESC 256

@@ -27,7 +27,8 @@
 #include "pan_fb.h"
 #include "pan_props.h"
 
-#define MAX_VBS 16
+/* 16 hardware bindings plus one internal compatibility buffer slot. */
+#define MAX_VBS 17
 
 #if PAN_ARCH < 10
 #define MAX_FRAMEBUFFER_DIMENSION (1 << 14)
