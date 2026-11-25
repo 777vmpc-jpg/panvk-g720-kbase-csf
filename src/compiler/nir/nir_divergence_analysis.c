@@ -794,6 +794,8 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_constant:
    case nir_intrinsic_load_sample_pos_from_id:
    case nir_intrinsic_load_kernel_input:
+   /* Provoking vertex mode is draw state, uniform across invocations. */
+   case nir_intrinsic_load_provoking_last:
    case nir_intrinsic_load_task_payload:
    case nir_intrinsic_load_buffer_amd:
    case nir_intrinsic_load_typed_buffer_amd:
@@ -1129,6 +1131,11 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_cumulative_coverage_pan:
    case nir_intrinsic_load_blend_input_pan:
    case nir_intrinsic_load_idvs_output_buf_index_pan:
+   /* Geometry-stage parameter buffer and pipeline-stat query addresses are
+    * conservatively divergent until their per-invocation behavior is modeled.
+    */
+   case nir_intrinsic_load_stat_query_address_poly:
+   case nir_intrinsic_load_geometry_param_buffer_poly:
    case nir_intrinsic_atest_pan:
    case nir_intrinsic_zs_emit_pan:
    case nir_intrinsic_load_return_param_amd:
