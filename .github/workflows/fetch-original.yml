@@ -2,6 +2,11 @@ name: Fetch original PanVK ZIP
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - g720-development
+    paths:
+      - .github/workflows/fetch-original.yml
 
 permissions:
   contents: read
