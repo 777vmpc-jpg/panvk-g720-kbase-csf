@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - panvk-g720-mc7-fix-wsi
 
 permissions:
   contents: read
