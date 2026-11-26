@@ -1501,9 +1501,9 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    free(props_buf);
 
    /* Android commonly exposes both cached and uncached system heaps.
-    * Try an explicit override first, then the standard heap names.  Keep
-    * O_RDONLY as the normal mode (the DMA-HEAP ioctl is allowed on it), with
-    * O_RDWR as a compatibility fallback for vendor kernels. */
+    * Try an explicit override first, then each standard heap name. A heap
+    * is usable only if allocation, Kbase import and the exact-address
+    * dma-buf alias probe all pass; do not stop at the first path that opens. */
    const char *dma_heap_override = getenv("PANVK_KBASE_DMA_HEAP");
    const char *dma_heaps[] = {
       dma_heap_override,
@@ -1527,28 +1527,32 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
       if (duplicate)
          continue;
 
-      kbase_dev->dma_heap_fd = open(path, O_RDONLY | O_CLOEXEC);
-      if (kbase_dev->dma_heap_fd < 0)
-         kbase_dev->dma_heap_fd = open(path, O_RDWR | O_CLOEXEC);
+      int heap_fd = open(path, O_RDONLY | O_CLOEXEC);
+      if (heap_fd < 0)
+         heap_fd = open(path, O_RDWR | O_CLOEXEC);
 
-      if (kbase_dev->dma_heap_fd >= 0) {
-         mesa_logi("kbase: opened DMA-HEAP %s", path);
+      if (heap_fd < 0) {
+         mesa_logd("kbase: cannot open DMA-HEAP %s: %s", path,
+                   strerror(errno));
+         continue;
+      }
+
+      kbase_dev->dma_heap_fd = heap_fd;
+      mesa_logi("kbase: testing DMA-HEAP %s", path);
+      if (kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
+         mesa_logi("kbase: selected DMA-HEAP %s for placed memory", path);
          break;
       }
 
-      mesa_logd("kbase: cannot open DMA-HEAP %s: %s", path,
-                strerror(errno));
-   }
-
-   /* Merely opening /dev/dma_heap is not enough: Kakarot needs the buffer
-    * to be importable by kbase and mappable at the exact guest VA. */
-   if (kbase_dev->dma_heap_fd >= 0 &&
-       !kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
-      mesa_logw("kbase: DMA-HEAP opened but allocation/import/placed-alias "
-                "probe failed; disabling VK_EXT_map_memory_placed");
+      mesa_logw("kbase: DMA-HEAP %s failed the full placed-memory probe; "
+                "trying the next heap", path);
       close(kbase_dev->dma_heap_fd);
       kbase_dev->dma_heap_fd = -1;
    }
+
+   if (kbase_dev->dma_heap_fd < 0)
+      mesa_logw("kbase: no DMA-HEAP passed allocation/import/placed-alias "
+                "validation; VK_EXT_map_memory_placed remains disabled");
 
    if (!kbase_dev->base.props.gpu_id) {
       mesa_loge("kbase: failed to determine GPU ID from properties");
