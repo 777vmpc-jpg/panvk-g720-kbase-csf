@@ -712,7 +712,7 @@ panvk_per_arch(get_physical_device_features)(
       /* VK_EXT_map_memory_placed */
       .memoryMapPlaced = kbase_kmod_supports_dmabuf(device->kmod.dev),
       .memoryMapRangePlaced = false,
-      .memoryUnmapReserve = kbase_kmod_supports_dmabuf(device->kmod.dev),
+      .memoryUnmapReserve = false, /* kbase alias unmap does not reserve the VA */
 
       /* VK_EXT_non_seamless_cube_map */
       .nonSeamlessCubeMap = true,
