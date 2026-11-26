@@ -462,9 +462,14 @@ panvk_GetMemoryFdKHR(VkDevice _device, const VkMemoryGetFdInfoKHR *pGetFdInfo,
       pGetFdInfo->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
 
    int prime_fd = pan_kmod_bo_export(memory->bo);
-   if (prime_fd < 0)
+   if (prime_fd < 0) {
+      mesa_logd("panvk: memory fd export failed for handle type 0x%x: %s",
+                pGetFdInfo->handleType, strerror(errno));
       return panvk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   }
 
+   mesa_logd("panvk: memory fd export succeeded for handle type 0x%x (fd %d)",
+             pGetFdInfo->handleType, prime_fd);
    *pFd = prime_fd;
    return VK_SUCCESS;
 }

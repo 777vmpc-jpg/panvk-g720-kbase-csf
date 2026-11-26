@@ -1504,6 +1504,9 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    if (kbase_dev->dma_heap_fd < 0)
       mesa_logd("kbase: dma-heap unavailable at %s: %s", dma_heap,
                 strerror(errno));
+   else
+      mesa_logd("kbase: dma-heap opened at %s (fd %d)", dma_heap,
+                kbase_dev->dma_heap_fd);
 
    if (!kbase_dev->base.props.gpu_id) {
       mesa_loge("kbase: failed to determine GPU ID from properties");
@@ -1839,6 +1842,12 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
 
    struct pan_kmod_bo *bo = kbase_kmod_import_dmabuf(
       dev, NULL, alloc.fd, alloc.len, kmod_flags, false);
+   if (bo)
+      mesa_logd("kbase: dma-heap BO imported: size %" PRIu64 " bytes",
+                alloc.len);
+   else
+      mesa_loge("kbase: dma-heap BO import failed: size %" PRIu64 " bytes",
+                alloc.len);
    close(alloc.fd);
    return bo;
 }
@@ -2022,10 +2031,16 @@ kbase_kmod_bo_export_fd(struct pan_kmod_bo *bo)
 
    if (kbase_bo->dmabuf_fd < 0) {
       errno = ENOSYS;
+      mesa_logd("kbase: BO export unavailable (no dma-buf backing)");
       return -1;
    }
 
-   return fcntl(kbase_bo->dmabuf_fd, F_DUPFD_CLOEXEC, 3);
+   int fd = fcntl(kbase_bo->dmabuf_fd, F_DUPFD_CLOEXEC, 3);
+   if (fd < 0)
+      mesa_loge("kbase: dma-buf fd duplication failed: %s", strerror(errno));
+   else
+      mesa_logd("kbase: exported dma-buf fd %d", fd);
+   return fd;
 }
 
 /* The GPU VA doubles as the mmap() file offset in kbase, but BOs are mapped
