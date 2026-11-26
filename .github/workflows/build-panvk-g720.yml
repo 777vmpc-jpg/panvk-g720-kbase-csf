@@ -21,6 +21,24 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Verificar fonte publica PanVK kbase
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="vendor/panvk-kbase-android-public"
+          test -f "$SRC/sources.lock"
+          test -d "$SRC/patches"
+          EXPECTED="cf70e02b918e1864cbcd746a7fefa57b96c673ce"
+          ACTUAL="$(git -C "$SRC" rev-parse HEAD)"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "Submodule Kbase inesperado: $ACTUAL"
+            exit 1
+          fi
+          COUNT="$(find "$SRC/patches" -type f -name '*.patch' | wc -l)"
+          echo "PanVK kbase public source: $ACTUAL"
+          echo "Public patch files retained: $COUNT"
+          git submodule status "$SRC"
+
       - name: Instalar dependencias Linux
         run: |
           sudo apt-get update
