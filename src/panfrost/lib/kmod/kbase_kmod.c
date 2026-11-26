@@ -154,6 +154,8 @@ struct kbase_kmod_bo {
    /* CPU mapping established at allocation time, valid for the whole BO
     * lifetime.  bo_mmap returns it; bo_munmap is a no-op. */
    void *cpu_ptr;
+   /* Active application-requested alias, used as the cache-sync address. */
+   void *placed_cpu_ptr;
 
    /* Mapping on the kbase fd which establishes the GPU VA.  This differs
     * from cpu_ptr for imported dma-bufs: Pixel kbase UMM mappings reserve the
@@ -1741,6 +1743,7 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    const uint64_t bo_size = req.out.va_pages * page_size;
    kbase_bo->same_va =
       (req.out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP)) != 0;
+   kbase_bo->placed_cpu_ptr = NULL;
 
    kbase_bo->gpu_mapping =
       mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd,
@@ -2035,8 +2038,11 @@ kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags,
       void *alias = mmap(host_addr, bo->size, prot,
                          (flags & ~MAP_PRIVATE) | MAP_SHARED | MAP_FIXED,
                          kbase_bo->dmabuf_fd, 0);
-      if (alias == MAP_FAILED)
+      if (alias == MAP_FAILED) {
          mesa_loge("kbase: dma-buf placed mmap failed: %s", strerror(errno));
+      } else {
+         kbase_bo->placed_cpu_ptr = alias;
+      }
       return alias;
    }
 
@@ -2051,8 +2057,12 @@ kbase_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
    struct kbase_kmod_bo *kbase_bo =
       container_of(bo, struct kbase_kmod_bo, base);
 
-   if (kbase_bo->dmabuf_fd >= 0 && host_addr != kbase_bo->cpu_ptr)
-      return munmap(host_addr, size);
+   if (kbase_bo->dmabuf_fd >= 0 && host_addr != kbase_bo->cpu_ptr) {
+      int ret = munmap(host_addr, size);
+      if (!ret && kbase_bo->placed_cpu_ptr == host_addr)
+         kbase_bo->placed_cpu_ptr = NULL;
+      return ret;
+   }
 
    return 0;
 }
@@ -2130,7 +2140,9 @@ kbase_kmod_flush_bo_map_syncs(struct pan_kmod_dev *dev)
 
       struct kbase_ioctl_mem_sync req = {
          .handle = kbase_bo->gpu_va,
-         .user_addr = (uintptr_t)kbase_bo->cpu_ptr + sync->start,
+         .user_addr = (uintptr_t)(kbase_bo->placed_cpu_ptr ?
+                         kbase_bo->placed_cpu_ptr : kbase_bo->cpu_ptr) +
+                      sync->start,
          .size = sync->size,
          .type = sync->type == PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH
                     ? BASE_SYNCSET_OP_MSYNC
