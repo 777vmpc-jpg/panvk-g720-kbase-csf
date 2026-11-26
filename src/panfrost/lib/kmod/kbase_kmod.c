@@ -1825,11 +1825,19 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev,
    struct kbase_kmod_dev *kbase_dev =
       container_of(dev, struct kbase_kmod_dev, base);
 
-   if (!exclusive_vm && kbase_dev->dma_heap_fd >= 0 &&
+   if (!exclusive_vm &&
        !(kmod_flags & (PAN_KMOD_BO_FLAG_EXECUTABLE |
                        PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT |
-                       PAN_KMOD_BO_FLAG_CSF_EVENT)))
+                       PAN_KMOD_BO_FLAG_CSF_EVENT))) {
+      if (kbase_dev->dma_heap_fd < 0) {
+         mesa_loge("kbase: shareable BO requested but no working DMA-HEAP "
+                   "is available");
+         errno = ENOTSUP;
+         return NULL;
+      }
+
       return kbase_kmod_bo_alloc_dmabuf(dev, size, kmod_flags);
+   }
 
    const uint64_t page_size = 4096;
    uint64_t va_pages = (size + page_size - 1) / page_size;
