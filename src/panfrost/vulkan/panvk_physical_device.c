@@ -46,6 +46,8 @@
 #include "panvk_image.h"
 #include "panvk_instance.h"
 #include "panvk_physical_device.h"
+
+#include "kmod/kbase_kmod.h"
 #include "panvk_wsi.h"
 
 #include "pan_afbc.h"
@@ -2561,6 +2563,8 @@ panvk_GetPhysicalDeviceExternalBufferProperties(
    const VkPhysicalDeviceExternalBufferInfo *pExternalBufferInfo,
    VkExternalBufferProperties *pExternalBufferProperties)
 {
+   VK_FROM_HANDLE(panvk_physical_device, pdev, physicalDevice);
+
    if (pExternalBufferInfo->handleType ==
        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
       vk_android_get_ahb_buffer_properties(physicalDevice, pExternalBufferInfo,
@@ -2579,7 +2583,11 @@ panvk_GetPhysicalDeviceExternalBufferProperties(
    VkExternalMemoryHandleTypeFlags handle_types =
       pExternalBufferInfo->handleType;
    VkExternalMemoryFeatureFlags features = 0;
-   if (pExternalBufferInfo->handleType & supported_handle_types) {
+   const bool kbase_shareable =
+      !pdev->kbase_node_path[0] ||
+      kbase_kmod_supports_dmabuf(pdev->kmod.dev);
+   if (kbase_shareable &&
+       (pExternalBufferInfo->handleType & supported_handle_types)) {
       handle_types |= supported_handle_types;
       features |= VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT |
                   VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
