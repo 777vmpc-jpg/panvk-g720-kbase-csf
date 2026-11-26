@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - fix-wayland-egl-backend-mc7
+      - integrate-faux123-192-mc7
 
 permissions:
   contents: read
@@ -188,28 +189,42 @@ jobs:
 
           path = Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c")
           source = path.read_text()
-          interval_old = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 128"
-          interval_new = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256"
-          if interval_old in source:
-              source = source.replace(interval_old, interval_new, 1)
-              print("Aplicado:", interval_new)
-          elif interval_new in source:
-              print("Ja aplicado:", interval_new)
-          else:
-              raise SystemExit("Nao foi possivel localizar a definicao de INTERVAL")
+          import re
 
-          work_old = "#define KBASE_TILER_HEAP_RENEW_WORK 65536"
-          work_new = "#define KBASE_TILER_HEAP_RENEW_WORK 131072"
-          if work_old in source:
-              source = source.replace(work_old, work_new, 1)
-              work_status = "131072 (aplicado)"
-              print("Aplicado:", work_new)
-          elif work_new in source:
-              work_status = "131072 (ja aplicado)"
-              print("Ja aplicado:", work_new)
+          interval = re.findall(
+              r"^#define KBASE_TILER_HEAP_RENEW_INTERVAL (\\d+)$",
+              source, re.MULTILINE)
+          work = re.findall(
+              r"^#define KBASE_TILER_HEAP_RENEW_WORK (\\d+)$",
+              source, re.MULTILINE)
+          if len(interval) != 1 or len(work) != 1:
+              raise SystemExit(
+                  f"Esperava exatamente uma definicao de cada macro; "
+                  f"INTERVAL={interval}, WORK={work}")
+
+          interval_value = int(interval[0])
+          if interval_value != 256:
+              source = re.sub(
+                  r"^#define KBASE_TILER_HEAP_RENEW_INTERVAL \\d+$",
+                  "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256",
+                  source, count=1, flags=re.MULTILINE)
+              print(f"Heap renew interval: {interval_value} -> 256")
           else:
-              work_status = "Nao aplicado - macro ausente no codigo-fonte"
-              print("Aviso: macro WORK nao encontrada; seguindo sem altera-la")
+              print("Heap renew interval: 256 (ja configurado)")
+
+          work_value = int(work[0])
+          target_work = 131072
+          if work_value != target_work:
+              source = re.sub(
+                  r"^#define KBASE_TILER_HEAP_RENEW_WORK \\d+$",
+                  f"#define KBASE_TILER_HEAP_RENEW_WORK {target_work}",
+                  source, count=1, flags=re.MULTILINE)
+              work_status = f"{target_work} (alterado de {work_value})"
+              print(f"Heap renew work: {work_value} -> {target_work}")
+          else:
+              work_status = f"{target_work} (ja configurado)"
+              print(f"Heap renew work: {target_work} (ja configurado)")
+
           path.write_text(source)
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
               env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
