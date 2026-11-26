@@ -1,0 +1,31 @@
+name: Audit Faux123 v1.1.9 driver
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retrieve-driver:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download published driver ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p audit
+          gh release download Novo \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "panvk_faux123_v1.1.9.adpkg.zip" \
+            --dir audit
+          test -s audit/panvk_faux123_v1.1.9.adpkg.zip
+          sha256sum audit/panvk_faux123_v1.1.9.adpkg.zip
+          unzip -l audit/panvk_faux123_v1.1.9.adpkg.zip
+      - name: Publish ZIP for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: faux123-v1.1.9-driver-audit
+          path: audit/panvk_faux123_v1.1.9.adpkg.zip
+          if-no-files-found: error
+          retention-days: 3
