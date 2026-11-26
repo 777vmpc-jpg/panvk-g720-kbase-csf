@@ -12,6 +12,7 @@ on:
       - fix-kbase-dmabuf-size-import
       - fix-panvk-vertex-buffer-range-guard
       - panvk-mc7-build144-performance
+      - panvk-mc7-build144-scratch4k
 
 permissions:
   contents: read
