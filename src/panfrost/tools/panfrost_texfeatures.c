@@ -75,7 +75,7 @@ main(void)
    uint32_t supported = pan_query_compressed_formats(&props);
    bool all_ok = true;
 
-   printf("TEXTURE_FEATURES_0: 0x%08x\\n\\n", supported);
+   printf("TEXTURE_FEATURES_0: 0x%08x\n\n", supported);
 
    printf("System-on-chip compressed texture support:"
           "\n\n");
