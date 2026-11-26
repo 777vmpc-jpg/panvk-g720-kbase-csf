@@ -1,4 +1,5 @@
 name: Build PanVK Mali G720 MC7 ARM64
+# Build 159 validation: compute TLS backing size and 64-bit framebuffer helper address.
 
 on:
   workflow_dispatch:
