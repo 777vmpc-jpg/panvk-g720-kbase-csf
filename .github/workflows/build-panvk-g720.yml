@@ -276,6 +276,39 @@ jobs:
           sha256sum output/libvulkan_panfrost.so
           echo "Biblioteca compilada: $LIB"
 
+      - name: Preparar meta.json do driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          test -s packaging/faux123-v1.1.9/meta.json
+          cp packaging/faux123-v1.1.9/meta.json output/meta-faux123-v1.1.9.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          source = json.loads(Path("packaging/faux123-v1.1.9/meta.json").read_text())
+          meta = dict(source)
+          meta["name"] = "PanVK faux123 v1.1.9 - Mali-G720 MC7 adaptation"
+          meta["description"] = (
+              source["description"]
+              + " Device adaptation: Mali-G720 MC7. "
+              + "This build is an experimental derivative; G720 MC7 support "
+              + "is not claimed by the original Faux123 v1.1.9 release."
+          )
+          meta["packageVersion"] = "v1.1.9-mc7"
+          Path("output/meta.json").write_text(
+              json.dumps(meta, indent=2, ensure_ascii=False) + "\\n"
+          )
+          # Validate both files and required installer fields.
+          for path in (Path("packaging/faux123-v1.1.9/meta.json"), Path("output/meta.json")):
+              data = json.loads(path.read_text())
+              for key in ("schemaVersion", "name", "packageVersion", "libraryName", "minApi"):
+                  assert key in data and data[key] not in (None, "")
+          PY
+          echo "Original Faux123 metadata and MC7 package metadata prepared."
+          sha256sum packaging/faux123-v1.1.9/meta.json output/meta-faux123-v1.1.9.json output/meta.json
+
       - name: Gerar informacoes do build
         run: |
           {
