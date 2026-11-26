@@ -208,8 +208,13 @@ kbase_cache_invalidate_range(const void *start, size_t size)
    uintptr_t ptr = (uintptr_t)start & ~(uintptr_t)(KBASE_CACHELINE_SIZE - 1);
    uintptr_t end = ALIGN_POT((uintptr_t)start + size, KBASE_CACHELINE_SIZE);
 
+   /* These ranges contain data produced by the GPU/CSF firmware.  Do not
+    * clean a potentially stale CPU cache line while invalidating it: a
+    * writeback here can overwrite newer GPU writes to the same line.
+    * DC IVAC discards the CPU copy; the system-scope barrier below orders
+    * subsequent CPU loads after the invalidation. */
    for (; ptr < end; ptr += KBASE_CACHELINE_SIZE)
-      __asm__ volatile("dc civac, %0" : : "r"(ptr) : "memory");
+      __asm__ volatile("dc ivac, %0" : : "r"(ptr) : "memory");
 #else
    (void)start;
    (void)size;
@@ -864,12 +869,15 @@ kbase_subqueue_wait_seqno(struct panvk_gpu_queue *queue, uint32_t subqueue,
                                                 CS_USER_IO_OUTPUT_CS_EXTRACT);
       uint32_t active = *(volatile uint32_t *)(output_page +
                                                CS_USER_IO_OUTPUT_CS_ACTIVE);
+
+      /* Invalidate before sampling GPU-owned completion state.  The
+       * invalidation helper intentionally discards stale CPU lines. */
+      kbase_cache_invalidate_range((const void *)cell, kbase_seqno_stride());
       if (prev_extract != extract || prev_seqno != cell->seqno) {
          (void)active;
          prev_extract = extract;
          prev_seqno = cell->seqno;
       }
-      kbase_cache_invalidate_range((const void *)cell, kbase_seqno_stride());
       if (cell->seqno >= target_seqno ||
           (PANVK_DEBUG(KBASE_DIAG) && *ls_copy >= target_seqno) ||
           (allow_ring_drain && extract >= target_insert && !active))
