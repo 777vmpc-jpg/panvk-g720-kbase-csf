@@ -2113,13 +2113,27 @@ kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
                                     MAP_SHARED, reserved);
    bool usable = alias == reserved;
    if (usable) {
-      const uint32_t pattern_a = 0x6b626173;
-      const uint32_t pattern_b = 0x706c6163;
-      *(volatile uint32_t *)kbase_bo->cpu_ptr = pattern_a;
-      usable = *(volatile uint32_t *)alias == pattern_a;
+      volatile uint32_t *original = kbase_bo->cpu_ptr;
+      volatile uint32_t *placed = alias;
+      const size_t words = size / sizeof(uint32_t);
+
+      for (size_t i = 0; i < words; i++)
+         original[i] = (uint32_t)i ^ 0x6b626173;
+      for (size_t i = 0; i < words; i++) {
+         if (placed[i] != ((uint32_t)i ^ 0x6b626173)) {
+            usable = false;
+            break;
+         }
+      }
       if (usable) {
-         *(volatile uint32_t *)alias = pattern_b;
-         usable = *(volatile uint32_t *)kbase_bo->cpu_ptr == pattern_b;
+         for (size_t i = 0; i < words; i++)
+            placed[i] = (uint32_t)i ^ 0x706c6163;
+         for (size_t i = 0; i < words; i++) {
+            if (original[i] != ((uint32_t)i ^ 0x706c6163)) {
+               usable = false;
+               break;
+            }
+         }
       }
       if (!usable)
          mesa_logw("kbase: DMA-BUF placed alias is not bidirectionally coherent");
