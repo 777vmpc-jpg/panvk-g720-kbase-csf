@@ -3227,6 +3227,7 @@ panvk_per_arch(gpu_queue_submit)(struct vk_queue *vk_queue, struct vk_queue_subm
 
 out:
    panvk_queue_submit_cleanup_storage(&submit, &stack_storage);
+   panvk_priv_bo_mem_report(false);
    return result;
 }
 
@@ -3366,6 +3367,7 @@ panvk_per_arch(destroy_gpu_queue)(struct vk_queue *vk_queue)
       kbase_queue_wait_current(queue, UINT64_MAX);
 #endif
 
+   panvk_priv_bo_mem_report(true);
    cleanup_queue(queue);
 #ifdef HAVE_PAN_KMOD_KBASE
    if (gpu_queue_uses_kbase(dev)) {

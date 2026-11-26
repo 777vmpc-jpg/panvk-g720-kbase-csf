@@ -4,6 +4,11 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
+#include <string.h>
+
+#include "util/os_misc.h"
+#include "util/os_time.h"
 
 #include "vk_alloc.h"
 #include "vk_log.h"
@@ -15,6 +20,32 @@
 #include "pan_props.h"
 
 #include "genxml/decode.h"
+
+/* Lightweight private-BO accounting. Opt in with PANVK_MEM_LOG=1. */
+static uint64_t panvk_priv_bo_live_B;
+static uint64_t panvk_priv_bo_allocs;
+static uint64_t panvk_priv_bo_frees;
+static uint64_t panvk_priv_bo_last_report_ns;
+
+void
+panvk_priv_bo_mem_report(bool final)
+{
+   const char *enabled = os_get_option("PANVK_MEM_LOG");
+   if (!enabled || !enabled[0] || !strcmp(enabled, "0"))
+      return;
+
+   uint64_t now = os_time_get_nano();
+   uint64_t last = p_atomic_read_relaxed(&panvk_priv_bo_last_report_ns);
+   if (!final && last && now - last < 10000000000ull)
+      return;
+   p_atomic_set(&panvk_priv_bo_last_report_ns, now);
+
+   mesa_logi("panvk-mem%s live=%.1f MiB allocs=%" PRIu64 " frees=%" PRIu64,
+             final ? "-final" : "",
+             (double)p_atomic_read_relaxed(&panvk_priv_bo_live_B) / 1048576.0,
+             p_atomic_read_relaxed(&panvk_priv_bo_allocs),
+             p_atomic_read_relaxed(&panvk_priv_bo_frees));
+}
 
 VkResult
 panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
@@ -88,6 +119,8 @@ panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
    }
 
    p_atomic_set(&priv_bo->refcnt, 1);
+   p_atomic_add(&panvk_priv_bo_live_B, pan_kmod_bo_size(bo));
+   p_atomic_inc(&panvk_priv_bo_allocs);
 
    *out = priv_bo;
    return VK_SUCCESS;
@@ -133,6 +166,9 @@ static void
 panvk_priv_bo_destroy(struct panvk_priv_bo *priv_bo)
 {
    struct panvk_device *dev = priv_bo->dev;
+
+   p_atomic_add(&panvk_priv_bo_live_B, -(int64_t)pan_kmod_bo_size(priv_bo->bo));
+   p_atomic_inc(&panvk_priv_bo_frees);
 
    panvk_address_binding_report(dev, NULL, priv_bo->addr.dev,
                                 pan_kmod_bo_size(priv_bo->bo),

@@ -6,6 +6,7 @@
 #ifndef PANVK_PRIV_BO_H
 #define PANVK_PRIV_BO_H
 
+#include <stdbool.h>
 #include <vulkan/vulkan_core.h>
 
 #include "util/list.h"
@@ -41,5 +42,8 @@ void panvk_priv_bo_flush(struct panvk_priv_bo *bo, size_t offset, size_t size);
 void panvk_priv_bo_invalidate(struct panvk_priv_bo *bo, size_t offset, size_t size);
 
 void panvk_priv_bo_unref(struct panvk_priv_bo *bo);
+
+/* Emit rate-limited private BO totals when PANVK_MEM_LOG=1. */
+void panvk_priv_bo_mem_report(bool final);
 
 #endif
