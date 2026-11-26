@@ -2087,6 +2087,16 @@ kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
       return false;
    }
 
+   int export_fd = kbase_kmod_bo_export_fd(bo);
+   if (export_fd < 0 || lseek(export_fd, 0, SEEK_END) <= 0) {
+      mesa_logw("kbase: DMA-BUF export probe failed: %s", strerror(errno));
+      if (export_fd >= 0)
+         close(export_fd);
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+   close(export_fd);
+
    size_t size = pan_kmod_bo_size(bo);
    struct kbase_kmod_bo *kbase_bo =
       container_of(bo, struct kbase_kmod_bo, base);
