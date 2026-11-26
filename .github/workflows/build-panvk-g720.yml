@@ -13,6 +13,7 @@ on:
       - auto-build-mc7-v1.1.9f
       - g720-mc7-faux-build
       - g720-mc7-bc-emul
+      - g720-mc7-baseline-import-retest
       - fix-kbase-dmabuf-size-import
       - fix-panvk-vertex-buffer-range-guard
       - panvk-mc7-build144-performance
