@@ -119,6 +119,25 @@ kbase_tiler_heap_renew_work(void)
    return threshold;
 }
 
+/* Public kbase patch 224: smaller initial tiler heaps. Keep the
+ * physical-device maximum unchanged; kbase grows heaps on demand. The old
+ * initial size can be restored with PANVK_KBASE_HEAP_INITIAL_CHUNKS. */
+static void
+kbase_heap_chunks(const struct panvk_physical_device *phys_dev,
+                  uint32_t *initial, uint32_t *max)
+{
+   *max = MAX2(phys_dev->csf.tiler.max_chunks, 200);
+   uint32_t default_initial = MIN2(phys_dev->csf.tiler.initial_chunks, 4);
+   int64_t requested =
+      debug_get_num_option("PANVK_KBASE_HEAP_INITIAL_CHUNKS",
+                           default_initial);
+   if (requested < 1)
+      requested = 1;
+   if ((uint64_t)requested > *max)
+      requested = *max;
+   *initial = (uint32_t)requested;
+}
+
 static VkResult
 kbase_subqueue_wait_seqno(struct panvk_gpu_queue *queue, uint32_t subqueue,
                           uint64_t target_seqno, uint32_t rekick_mask,
@@ -2107,12 +2126,13 @@ init_tiler(struct panvk_gpu_queue *queue)
       /* Match the Valhall G610/G710 kbase reference.  The panthor-derived
        * limit of 64 can strand large geometry workloads on the tiler iterator;
        * larger multi-GiB limits can trigger Android's global OOM killer. */
-      const uint32_t tiler_heap_max_chunks =
-         MAX2(phys_dev->csf.tiler.max_chunks, 200);
+      uint32_t tiler_heap_initial_chunks, tiler_heap_max_chunks;
+      kbase_heap_chunks(phys_dev, &tiler_heap_initial_chunks,
+                        &tiler_heap_max_chunks);
 
       if (kbase_kmod_csf_tiler_heap_create(
              dev->kmod.dev, tiler_heap->chunk_size,
-             phys_dev->csf.tiler.initial_chunks, tiler_heap_max_chunks,
+             tiler_heap_initial_chunks, tiler_heap_max_chunks,
              65535, tiler_heap_mem_group, &heap_ctx_va, &first_chunk_va)) {
          result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                                "Failed to create a tiler heap context");
@@ -2248,7 +2268,8 @@ kbase_renew_tiler_heap(struct panvk_gpu_queue *queue)
    const struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(dev->vk.physical);
    struct panvk_tiler_heap *tiler_heap = &queue->tiler_heap;
-   const uint32_t max_chunks = MAX2(phys_dev->csf.tiler.max_chunks, 200);
+   uint32_t initial_chunks, max_chunks;
+   kbase_heap_chunks(phys_dev, &initial_chunks, &max_chunks);
    uint64_t new_ctx, first_chunk;
 
    /* Hold at most one retired context: if the previous one is still
@@ -2259,7 +2280,7 @@ kbase_renew_tiler_heap(struct panvk_gpu_queue *queue)
 
    if (kbase_kmod_csf_tiler_heap_create(
           dev->kmod.dev, tiler_heap->chunk_size,
-          phys_dev->csf.tiler.initial_chunks, max_chunks, 65535, 0,
+          initial_chunks, max_chunks, 65535, 0,
           &new_ctx, &first_chunk)) {
       return panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                           "Failed to renew the kbase tiler heap");
