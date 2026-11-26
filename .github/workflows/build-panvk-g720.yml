@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - fix-wayland-egl-backend-mc7
 
 permissions:
   contents: read
@@ -34,7 +35,7 @@ jobs:
             libclc-18 libclc-18-dev \
             libdrm-dev libelf-dev \
             libexpat1-dev libzstd-dev zlib1g-dev \
-            libwayland-dev wayland-protocols \
+            libwayland-dev libwayland-egl-backend-dev wayland-protocols \
             libx11-dev libx11-xcb-dev \
             libxrandr-dev libxdamage-dev \
             libxfixes-dev libxext-dev \
@@ -47,6 +48,14 @@ jobs:
             libedit-dev libncurses-dev \
             libudev-dev patchelf \
             glslang-tools
+
+      - name: Verificar dependencias Wayland do Meson
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg-config --modversion wayland-client
+          pkg-config --modversion wayland-egl-backend
+          test -f /usr/include/wayland-egl-backend.h
 
       - name: Instalar Android SDK e NDK
         uses: android-actions/setup-android@v3
