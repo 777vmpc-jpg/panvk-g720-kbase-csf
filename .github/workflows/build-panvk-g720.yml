@@ -31,6 +31,7 @@ jobs:
             cmake ninja-build \
             bison flex \
             clang llvm llvm-dev lld \
+            libllvmspirvlib-18-dev llvm-spirv-18 \
             libclang-dev \
             libclc-18 libclc-18-dev \
             libdrm-dev libelf-dev \
