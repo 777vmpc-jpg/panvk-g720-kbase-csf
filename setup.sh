@@ -3,6 +3,12 @@ set -euo pipefail
 
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/27.0.12077973}"
 export MESON_WORKING_DIR="$PWD"
+NDK_SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+# Bindgen usa uma variavel especifica para o target e pode nao aplicar a generica.
+# Forca os headers Android para evitar que libclang caia nos headers glibc do runner.
+export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$NDK_SYSROOT -isystem $NDK_SYSROOT/usr/include -isystem $NDK_SYSROOT/usr/include/aarch64-linux-android"
+export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="$BINDGEN_EXTRA_CLANG_ARGS"
+export BINDGEN_EXTRA_CLANG_ARGS_AARCH64_LINUX_ANDROID="$BINDGEN_EXTRA_CLANG_ARGS"
 
 if [[ ! -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" ]]; then
   echo "NDK nao encontrado ou incompleto: $ANDROID_NDK_HOME" >&2
@@ -13,7 +19,16 @@ fi
 # Estas opcoes seguem a configuracao documentada pelo Mesa para cross-builds Panfrost.
 rm -rf build-host
 meson setup build-host \
+  -Dplatforms=x11 \
+  -Dglx=disabled \
+  -Degl=disabled \
+  -Dgbm=disabled \
+  -Dopengl=false \
+  -Dgles1=disabled \
+  -Dgles2=disabled \
   -Dtools=panfrost \
+  -Dgallium-drivers=panfrost \
+  -Dvulkan-drivers= \
   -Dmesa-clc=enabled \
   -Dinstall-mesa-clc=true \
   -Dprecomp-compiler=enabled \
@@ -58,14 +73,6 @@ Libs: -lXrandr
 Cflags:
 PC
 
-cat > shims/libdrm.pc <<'PC'
-Name: libdrm
-Description: libdrm
-Version: 2.5
-Libs: -ldrm
-Cflags:
-PC
-
 cat > shims/libx11-xcb.pc <<'PC'
 Name: libx11-xcb
 Description: libx11-xcb
@@ -96,15 +103,18 @@ if [[ ! -f android.toml ]]; then
   echo "Arquivo android.toml nao encontrado na raiz do repositorio" >&2
   exit 1
 fi
+# Isola o pkg-config Android das bibliotecas instaladas no host.
+unset PKG_CONFIG_PATH
+
 envsubst < android.toml > /tmp/android_wrapper.toml
 
 MESON_ARGS=(
   --cross-file /tmp/android_wrapper.toml
-  -Dbuildtype=debug
-  -Dplatforms=android,x11
+  -Dbuildtype=release
+  -Dplatforms=android
   -Dandroid-stub=true
   -Dandroid-libbacktrace=disabled
-  -Dplatform-sdk-version=30
+  -Dplatform-sdk-version=31
   -Dglx=disabled
   -Dgbm=disabled
   -Degl=disabled
@@ -122,6 +132,12 @@ MESON_ARGS=(
   -Dllvm=disabled
   -Dstrip=false
   -Dpanfrost-kmds=kbase,panthor
+  -Dpanfrost-rust=false
+  -Dallow-fallback-for=libdrm \
+  --force-fallback-for=libdrm,zlib,expat
+  -Dlibdrm:default_library=static
+  -Dzlib:default_library=static
+  -Dexpat:default_library=static
 )
 
 if [[ -d build ]]; then

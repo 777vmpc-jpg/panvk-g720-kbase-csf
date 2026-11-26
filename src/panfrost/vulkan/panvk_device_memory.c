@@ -18,6 +18,8 @@
 #include "vk_debug_utils.h"
 #include "vk_log.h"
 
+#include <unistd.h>
+
 static void
 panvk_memory_emit_report(struct panvk_device *device,
                          const struct panvk_device_memory *mem,
@@ -478,6 +480,46 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
       to_panvk_physical_device(device->vk.physical);
 
    assert(handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+
+#if defined(HAVE_PAN_KMOD_KBASE)
+   /*
+    * On kbase, GetMemoryFdPropertiesKHR must not transiently import and free
+    * the dma-buf just to calculate memoryTypeBits. Some Kbase/Gralloc
+    * combinations alias the imported buffer to a GPU VA; the temporary
+    * release can tear down its mappings before the real ANB import.
+    *
+    * The Kbase external-import path uses kmod_flags=0. Match its memory
+    * property assumptions without creating a temporary GPU mapping.
+    */
+   if (phys_dev->kbase_node_path[0]) {
+      if (fd < 0 || lseek(fd, 0, SEEK_END) < 0)
+         return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+      const bool can_do_host_visible = true;
+      const bool can_do_host_coherent = true;
+      const bool can_do_host_cached = false;
+      pMemoryFdProperties->memoryTypeBits = 0;
+      for (uint32_t i = 0; i < phys_dev->memory.type_count; i++) {
+         if (!can_do_host_visible &&
+             (phys_dev->memory.types[i].propertyFlags &
+              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+            continue;
+         if (!can_do_host_coherent &&
+             (phys_dev->memory.types[i].propertyFlags &
+              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+            continue;
+         if (!can_do_host_cached &&
+             (phys_dev->memory.types[i].propertyFlags &
+              VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
+            continue;
+
+         pMemoryFdProperties->memoryTypeBits |= BITFIELD_BIT(i);
+      }
+      return pMemoryFdProperties->memoryTypeBits
+                ? VK_SUCCESS
+                : VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+#endif
 
    struct pan_kmod_bo *bo = pan_kmod_bo_import(device->kmod.dev, fd);
    if (!bo)

@@ -638,6 +638,27 @@ vk_drm_syncobj_copy_payloads(struct vk_device *device,
                              uint32_t signal_count,
                              const struct vk_sync_signal *signals)
 {
+   /* Kbase-backed PanVK devices use CPU sync objects with GPU sequence
+    * numbers, not DRM syncobjs.  This helper is also used by generic Vulkan
+    * submission paths, so never pass a Kbase sync to to_drm_syncobj().
+    *
+    * Preserve copy-payload semantics with a CPU wait followed by signaling.
+    * Kbase sync wait_many resolves the pending CSF sequence numbers. */
+   bool has_non_drm_sync = false;
+   for (uint32_t i = 0; i < wait_count; i++)
+      has_non_drm_sync |= !vk_sync_type_is_drm_syncobj(waits[i].sync->type);
+   for (uint32_t i = 0; i < signal_count; i++)
+      has_non_drm_sync |= !vk_sync_type_is_drm_syncobj(signals[i].sync->type);
+
+   if (has_non_drm_sync) {
+      VkResult result = vk_sync_wait_many(device, wait_count, waits, 0,
+                                          UINT64_MAX);
+      if (result != VK_SUCCESS)
+         return result;
+
+      return vk_sync_signal_many(device, signal_count, signals);
+   }
+
    /* First check if there's even anything to signal */
    if (signal_count == 0)
       return VK_SUCCESS;

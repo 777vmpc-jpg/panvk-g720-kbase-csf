@@ -250,23 +250,53 @@ panvk_android_ahb_image_init(struct AHardwareBuffer *ahb,
 static int
 get_valid_dma_buf_fd(VkDevice device, const native_handle_t *handle)
 {
+   VK_FROM_HANDLE(vk_device, dev, device);
+
+   /*
+    * Android native handles may contain auxiliary gralloc descriptors before
+    * the actual dma-buf (for example anon_inode:gralloc_extra0). Do not use
+    * handle->data[0] as a fallback: importing that descriptor reaches Kbase
+    * and fails with a misleading ENOMEM.
+    */
    for (int i = 0; i < handle->numFds; i++) {
       int fd = handle->data[i];
-      if (fd < 0) continue;
+      char fd_path[64], fd_target[160] = {0};
+      ssize_t target_len = -1;
 
-      // Ensure the fd is seekable (data handle instead of a fence fd)
-      if (lseek(fd, 0, SEEK_END) < 0) continue;
+      if (fd < 0)
+         continue;
+
+      int path_len = snprintf(fd_path, sizeof(fd_path),
+                              "/proc/self/fd/%d", fd);
+      if (path_len > 0 && (size_t)path_len < sizeof(fd_path))
+         target_len = readlink(fd_path, fd_target, sizeof(fd_target) - 1);
+      if (target_len >= 0)
+         fd_target[target_len] = '\\0';
+
+      mesa_logi("panvk: AHB native FD[%d]=%d target=%s", i, fd,
+                target_len >= 0 ? fd_target : "(unavailable)");
+
+      /* Select by kernel-exported dma-buf identity, not by FD position. */
+      if (target_len < 0 ||
+          (strstr(fd_target, "dmabuf") == NULL &&
+           strstr(fd_target, "dma_buf") == NULL))
+         continue;
 
       VkMemoryFdPropertiesKHR fd_props = {
          .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
       };
-      VK_FROM_HANDLE(vk_device, dev, device);
-      if (dev->dispatch_table.GetMemoryFdPropertiesKHR(
-            device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fd_props) == VK_SUCCESS) {
+      VkResult result = dev->dispatch_table.GetMemoryFdPropertiesKHR(
+         device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd,
+         &fd_props);
+      mesa_logi("panvk: AHB DMA-BUF candidate FD[%d]=%d properties=%d",
+                i, fd, result);
+      if (result == VK_SUCCESS)
          return fd;
-      }
    }
-   return handle->data[0];
+
+   mesa_loge("panvk: no importable DMA-BUF found in AHB native handle (%d FDs)",
+             handle->numFds);
+   return -1;
 }
 
 static VkResult
@@ -282,6 +312,8 @@ panvk_android_import_ahb_memory(VkDevice device,
    // int dma_buf_fd = handle->data[0];
    int dma_buf_fd = get_valid_dma_buf_fd(device, handle);
    mesa_logi("panvk_android_import_ahb_memory: dma_buf_fd=%d", dma_buf_fd);
+   if (dma_buf_fd < 0)
+      return panvk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
    VkResult result;
 
    VkImage img_handle = VK_NULL_HANDLE;
