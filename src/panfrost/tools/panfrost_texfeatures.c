@@ -41,7 +41,7 @@ static struct format formats[] = {
    FMT(20, "ASTC 3D LDR"),
    FMT(21, "ASTC 3D HDR"),
    FMT(22, "ASTC 2D LDR"),
-   FMT(23, "ASTC 3D HDR"),
+   FMT(23, "ASTC 2D HDR"),
    {0, NULL},
    FMT(7, "BC1"),
    FMT(8, "BC2"),
@@ -74,6 +74,8 @@ main(void)
    struct pan_kmod_dev_props props = dev->props;
    uint32_t supported = pan_query_compressed_formats(&props);
    bool all_ok = true;
+
+   printf("TEXTURE_FEATURES_0: 0x%08x\\n\\n", supported);
 
    printf("System-on-chip compressed texture support:"
           "\n\n");
