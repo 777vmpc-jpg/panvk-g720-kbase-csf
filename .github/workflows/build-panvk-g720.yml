@@ -210,10 +210,10 @@ jobs:
           import re
 
           interval = re.findall(
-              r"^#define KBASE_TILER_HEAP_RENEW_INTERVAL (\\d+)$",
+              r"^#define KBASE_TILER_HEAP_RENEW_INTERVAL (\d+)$",
               source, re.MULTILINE)
           work = re.findall(
-              r"^#define KBASE_TILER_HEAP_RENEW_WORK (\\d+)$",
+              r"^#define KBASE_TILER_HEAP_RENEW_WORK (\d+)$",
               source, re.MULTILINE)
           if len(interval) != 1 or len(work) != 1:
               raise SystemExit(
@@ -223,7 +223,7 @@ jobs:
           interval_value = int(interval[0])
           if interval_value != 256:
               source = re.sub(
-                  r"^#define KBASE_TILER_HEAP_RENEW_INTERVAL \\d+$",
+                  r"^#define KBASE_TILER_HEAP_RENEW_INTERVAL \d+$",
                   "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256",
                   source, count=1, flags=re.MULTILINE)
               print(f"Heap renew interval: {interval_value} -> 256")
@@ -234,7 +234,7 @@ jobs:
           target_work = 131072
           if work_value != target_work:
               source = re.sub(
-                  r"^#define KBASE_TILER_HEAP_RENEW_WORK \\d+$",
+                  r"^#define KBASE_TILER_HEAP_RENEW_WORK \d+$",
                   f"#define KBASE_TILER_HEAP_RENEW_WORK {target_work}",
                   source, count=1, flags=re.MULTILINE)
               work_status = f"{target_work} (alterado de {work_value})"
