@@ -12,8 +12,6 @@
 #include "panvk_device_memory.h"
 #include "panvk_entrypoints.h"
 
-#include "kmod/kbase_kmod.h"
-
 #include <unistd.h>
 
 #include "pan_props.h"
@@ -497,7 +495,7 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
     * leave a later real import with a stale VA.  For our shareable kbase
     * allocations the import flags are fixed (visible + coherent, uncached),
     * so derive the compatible memory types without creating a GPU mapping. */
-   if (kbase_kmod_supports_dmabuf(device->kmod.dev)) {
+   if (phys_dev->kbase_node_path[0]) {
       if (fd < 0 || lseek(fd, 0, SEEK_END) <= 0)
          return VK_ERROR_INVALID_EXTERNAL_HANDLE;
 
