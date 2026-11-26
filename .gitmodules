@@ -1,0 +1,3 @@
+[submodule "vendor/panvk-kbase-android-public"]
+	path = vendor/panvk-kbase-android-public
+	url = https://github.com/zenithblue-oss/panvk-kbase-android.git
