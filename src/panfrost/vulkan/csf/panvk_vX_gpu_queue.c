@@ -2760,7 +2760,7 @@ kbase_collect_internal_gpu_waits(
 {
    *wait_count = 0;
 
-   if (!debug_get_bool_option("PANVK_KBASE_GPU_INTERNAL_WAITS", true) ||
+   if (!debug_get_bool_option("PANVK_KBASE_GPU_INTERNAL_WAITS", false) ||
        !vk_submit->wait_count || !vk_submit->command_buffer_count)
       return false;
 

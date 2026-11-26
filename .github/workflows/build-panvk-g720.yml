@@ -18,6 +18,7 @@ on:
       - fix-panvk-vertex-buffer-range-guard
       - panvk-mc7-build144-performance
       - panvk-mc7-build159-tls64
+      - g720-mc7-disable-native-waits-test
 
 permissions:
   contents: read
