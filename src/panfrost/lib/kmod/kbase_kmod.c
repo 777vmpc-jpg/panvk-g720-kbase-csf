@@ -2142,15 +2142,33 @@ kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
       if (usable) {
          for (size_t i = 0; i < words; i++)
             placed[i] = (uint32_t)i ^ 0x706c6163;
+
+         /* Match the Peanuts Native readiness test: its OPAQUE_FD path
+          * requires aliases to support page protection changes as well as
+          * bidirectional visibility.  Keep this probe on a page inside the
+          * reserved mapping so it cannot affect unrelated process memory. */
+         if (mprotect((char *)alias + page_size, page_size, PROT_READ)) {
+            mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ) failed: %s",
+                      strerror(errno));
+            usable = false;
+         } else if (mprotect((char *)alias + page_size, page_size,
+                             PROT_READ | PROT_WRITE)) {
+            mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ|PROT_WRITE) "
+                      "restore failed: %s", strerror(errno));
+            usable = false;
+         }
+
          for (size_t i = 0; i < words; i++) {
-            if (original[i] != ((uint32_t)i ^ 0x706c6163)) {
+            if (original[i] != ((uint32_t)i ^ 0x706c6163) ||
+                placed[i] != original[i]) {
                usable = false;
                break;
             }
          }
       }
       if (!usable)
-         mesa_logw("kbase: DMA-BUF placed alias is not bidirectionally coherent");
+         mesa_logw("kbase: DMA-BUF placed alias failed bidirectional "
+                   "visibility or mprotect validation");
       if (kbase_kmod_bo_munmap(bo, alias, size))
          usable = false;
    } else {
