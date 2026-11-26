@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - g720-mc7-linear-swapchain-fix
 
 permissions:
   contents: read
@@ -33,7 +32,6 @@ jobs:
             clang llvm llvm-dev lld \
             libclang-dev \
             libclc-18 libclc-18-dev \
-            libllvmspirvlib-18-dev llvm-spirv-18 \
             libdrm-dev libelf-dev \
             libexpat1-dev libzstd-dev zlib1g-dev \
             libwayland-dev wayland-protocols \
@@ -169,15 +167,6 @@ jobs:
             exit 1
           fi
 
-      - name: Aplicar correcoes Android WSI/gralloc
-        if: github.ref_name == 'g720-mc7-linear-swapchain-fix'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git apply --check patches/android/014-vendor-neutral-gralloc-mapper-and-hidl-mapper4.patch
-          git apply patches/android/014-vendor-neutral-gralloc-mapper-and-hidl-mapper4.patch
-          python3 scripts/apply-mc7-swapchain-fix.py
-
       - name: Aplicar ajustes de heap MC7
         shell: bash
         run: |
@@ -273,29 +262,6 @@ jobs:
             echo "SHA256:"
             sha256sum output/libvulkan_panfrost.so
           } > output/BUILD-INFO.txt
-
-      - name: Gerar pacote ADPKG
-        if: github.ref_name == 'g720-mc7-linear-swapchain-fix'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p package
-          cp output/libvulkan_panfrost.so package/libvulkan_panfrost.so
-          cat > package/meta.json <<'EOF'
-          {
-            "schemaVersion": 1,
-            "name": "PanVK G720 MC7 optimized",
-            "description": "Mesa PanVK Kbase/CSF for Mali-G720 MC7 with vendor-neutral Android gralloc mapper support and MediaTek linear swapchain usage.",
-            "author": "PanVK G720 MC7 project",
-            "packageVersion": "v0.1.0-mc7-linear-swapchain",
-            "vendor": "Mesa",
-            "driverVersion": "26.3.0-devel",
-            "minApi": 29,
-            "libraryName": "libvulkan_panfrost.so"
-          }
-          EOF
-          (cd package && zip -9 ../output/PanVK-G720-MC7-test.adpkg libvulkan_panfrost.so meta.json)
-          sha256sum output/PanVK-G720-MC7-test.adpkg
 
       - name: Publicar biblioteca compilada
         uses: actions/upload-artifact@v4
