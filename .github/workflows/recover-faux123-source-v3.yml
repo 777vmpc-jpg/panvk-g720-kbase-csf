@@ -25,7 +25,7 @@ jobs:
           git clone --filter=blob:none --no-checkout https://github.com/zenithblue-oss/panvk-kbase-android.git recovery-source
           git -C recovery-source fetch --depth 1 origin 5b87b74d3e2580d5816e7f2c629f6f016a462f28
           git -C recovery-source sparse-checkout init --cone
-          git -C recovery-source sparse-checkout set patches scripts profiles docs
+          git -C recovery-source sparse-checkout set patches scripts profiles docs meson
           git -C recovery-source checkout --detach 5b87b74d3e2580d5816e7f2c629f6f016a462f28
           test "$(git -C recovery-source rev-parse HEAD)" = "5b87b74d3e2580d5816e7f2c629f6f016a462f28"
           test "$(python3 -c "import json;print(json.load(open('recovery-source/sources.lock'))['mesaCommit'])")" = "5a07217f034b3e50d8c7c7794f97a2df1742613b"
