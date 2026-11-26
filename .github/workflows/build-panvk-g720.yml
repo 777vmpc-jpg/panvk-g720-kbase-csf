@@ -39,10 +39,10 @@ jobs:
             libwayland-dev libwayland-egl-backend-dev wayland-protocols \
             libx11-dev libx11-xcb-dev \
             libxrandr-dev libxdamage-dev \
-            libxfixes-dev libxext-dev \
+            libxfixes-dev libxext-dev libxxf86vm-dev \
             libxcb1-dev libxcb-randr0-dev \
             libxcb-dri3-dev libxcb-present-dev \
-            libxcb-glx0-dev \
+            libxcb-glx0-dev libxcb-keysyms1-dev \
             libxcb-shm0-dev libxcb-sync-dev \
             libxcb-xfixes0-dev libxshmfence-dev \
             libvulkan-dev libxml2-dev \
@@ -59,6 +59,8 @@ jobs:
           pkg-config --modversion wayland-egl-backend
           pkg-config --modversion LLVMSPIRVLib
           pkg-config --modversion xcb-glx
+          pkg-config --modversion xcb-keysyms
+          pkg-config --modversion xxf86vm
           test -f /usr/include/wayland-egl-backend.h
 
       - name: Instalar Android SDK e NDK
@@ -142,13 +144,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          # O Mesa atual exige bindgen 0.71.1 ou superior.
           cargo install --locked bindgen-cli --version 0.72.1
-
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
-
           "$HOME/.cargo/bin/bindgen" --version
 
       - name: Verificar ferramentas
@@ -160,21 +158,18 @@ jobs:
           rustc --version
           cargo --version
           bindgen --version
-
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
 
       - name: Verificar codigo-fonte
         shell: bash
         run: |
           set -euo pipefail
-
           for file in setup.sh android.toml meson.build; do
             if [ ! -f "$file" ]; then
               echo "Arquivo obrigatorio ausente: $file"
               exit 1
             fi
           done
-
           if [ ! -f src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c ]; then
             echo "Arquivo PanVK CSF nao encontrado."
             exit 1
@@ -184,30 +179,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           python3 - <<'PY'
           from pathlib import Path
           import os
 
           path = Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c")
           source = path.read_text()
-
           interval_old = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 128"
           interval_new = "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256"
-
           if interval_old in source:
               source = source.replace(interval_old, interval_new, 1)
               print("Aplicado:", interval_new)
           elif interval_new in source:
               print("Ja aplicado:", interval_new)
           else:
-              raise SystemExit(
-                  "Nao foi possivel localizar a definicao de INTERVAL"
-              )
+              raise SystemExit("Nao foi possivel localizar a definicao de INTERVAL")
 
           work_old = "#define KBASE_TILER_HEAP_RENEW_WORK 65536"
           work_new = "#define KBASE_TILER_HEAP_RENEW_WORK 131072"
-
           if work_old in source:
               source = source.replace(work_old, work_new, 1)
               work_status = "131072 (aplicado)"
@@ -218,9 +207,7 @@ jobs:
           else:
               work_status = "Nao aplicado - macro ausente no codigo-fonte"
               print("Aviso: macro WORK nao encontrada; seguindo sem altera-la")
-
           path.write_text(source)
-
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
               env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
           PY
@@ -235,31 +222,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           bash ./setup.sh
-
           meson compile -C build
 
       - name: Localizar biblioteca compilada
         shell: bash
         run: |
           set -euo pipefail
-
-          LIB="$(find build -type f \
-            -name libvulkan_panfrost.so \
-            -print -quit)"
-
+          LIB="$(find build -type f -name libvulkan_panfrost.so -print -quit)"
           if [ -z "$LIB" ]; then
             echo "Biblioteca nao encontrada."
             exit 1
           fi
-
           mkdir -p output
           cp "$LIB" output/libvulkan_panfrost.so
-
           file output/libvulkan_panfrost.so
           sha256sum output/libvulkan_panfrost.so
-
           echo "Biblioteca compilada: $LIB"
 
       - name: Gerar informacoes do build
