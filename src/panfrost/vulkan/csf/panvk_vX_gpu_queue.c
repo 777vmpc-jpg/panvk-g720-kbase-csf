@@ -470,6 +470,17 @@ kbase_subqueue_reserve_ring(struct panvk_gpu_queue *queue,
    return VK_SUCCESS;
 }
 
+/* Two TILER_HEAP descriptors occupy the first cache line(s) of tiler_heap.desc;
+ * the geometry buffer remains fixed at +4096. */
+#define KBASE_HEAP_DESC_SLOT_STRIDE 64
+
+static uint64_t
+kbase_heap_desc_addr(const struct panvk_gpu_queue *queue)
+{
+   return panvk_priv_mem_dev_addr(queue->tiler_heap.desc) +
+          queue->kbase_heap_slot * KBASE_HEAP_DESC_SLOT_STRIDE;
+}
+
 static VkResult
 kbase_subqueue_emit_job(struct panvk_gpu_queue *queue, uint32_t subqueue,
                         uint64_t stream_addr, uint32_t stream_size,
@@ -604,6 +615,20 @@ kbase_subqueue_emit_job(struct panvk_gpu_queue *queue, uint32_t subqueue,
    if (subqueue != PANVK_SUBQUEUE_COMPUTE) {
       cs_move64_to(&b, addr64, queue->tiler_heap.context.dev_addr);
       cs_heap_set(&b, addr64);
+
+      /* Each graphics ring entry selects the descriptor slot belonging to
+       * its heap generation. In-flight entries keep their old slot. */
+      uint64_t heap_desc = kbase_heap_desc_addr(queue);
+      if (subq->kbase.heap_desc != heap_desc) {
+         cs_move64_to(&b, addr64,
+                      panvk_priv_mem_dev_addr(subq->context) +
+                         offsetof(struct panvk_cs_subqueue_context,
+                                  render.tiler_heap));
+         cs_move64_to(&b, val64, heap_desc);
+         cs_store64(&b, val64, addr64, 0);
+         cs_wait_slot(&b, SB_ID(LS));
+         subq->kbase.heap_desc = heap_desc;
+      }
    }
 
    /* Diagnostic breadcrumbs are useful when investigating a hang, but each
@@ -1692,6 +1717,10 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
           * to the tiler descriptors. */
          cs_ctx->render.geom_buf =
             (cs_ctx->render.tiler_heap + 4096) | ((64 * 1024) >> 12);
+#ifdef HAVE_PAN_KMOD_KBASE
+         if (gpu_queue_uses_kbase(dev))
+            subq->kbase.heap_desc = cs_ctx->render.tiler_heap;
+#endif
 
          /* Initialize the ringbuf */
          cs_ctx->render.desc_ringbuf = (struct panvk_cs_desc_ringbuf){
@@ -2200,9 +2229,9 @@ kbase_try_destroy_retired_heap(struct panvk_gpu_queue *queue)
    if (!queue->kbase_retired_heap.ctx)
       return true;
 
-   if (queue->subqueues[PANVK_SUBQUEUE_VERTEX_TILER].kbase.emitted_jobs <=
+   if (kbase_subqueue_seqno_cell(queue, PANVK_SUBQUEUE_VERTEX_TILER)->seqno <=
           queue->kbase_retired_heap.vt_jobs ||
-       queue->subqueues[PANVK_SUBQUEUE_FRAGMENT].kbase.emitted_jobs <=
+       kbase_subqueue_seqno_cell(queue, PANVK_SUBQUEUE_FRAGMENT)->seqno <=
           queue->kbase_retired_heap.frag_jobs)
       return false;
 
@@ -2226,7 +2255,7 @@ kbase_renew_tiler_heap(struct panvk_gpu_queue *queue)
     * firmware-visible (no graphics ring entry ran since), skip this
     * renewal and retry on a later graphics submission. */
    if (!kbase_try_destroy_retired_heap(queue))
-      return VK_SUCCESS;
+      return VK_INCOMPLETE;
 
    if (kbase_kmod_csf_tiler_heap_create(
           dev->kmod.dev, tiler_heap->chunk_size,
@@ -2239,13 +2268,16 @@ kbase_renew_tiler_heap(struct panvk_gpu_queue *queue)
    uint64_t old_ctx = tiler_heap->context.dev_addr;
    tiler_heap->context.dev_addr = new_ctx;
 
-   panvk_priv_mem_write_desc(tiler_heap->desc, 0, TILER_HEAP, cfg) {
+   const uint32_t slot = queue->kbase_heap_slot ^ 1;
+   const uint32_t slot_offset = slot * KBASE_HEAP_DESC_SLOT_STRIDE;
+   panvk_priv_mem_write_desc(tiler_heap->desc, slot_offset, TILER_HEAP, cfg) {
       cfg.size = tiler_heap->chunk_size;
       cfg.base = first_chunk;
       cfg.bottom = cfg.base + 64;
       cfg.top = cfg.base + cfg.size;
    }
-   kbase_clean_priv_mem(tiler_heap->desc, 0, pan_size(TILER_HEAP));
+   kbase_clean_priv_mem(tiler_heap->desc, slot_offset, pan_size(TILER_HEAP));
+   queue->kbase_heap_slot = slot;
 
    queue->kbase_retired_heap.ctx = old_ctx;
    queue->kbase_retired_heap.vt_jobs =
@@ -2920,21 +2952,35 @@ panvk_queue_submit_ioctl_kbase(struct panvk_queue_submit *submit,
        (queue->kbase_tiler_submit_count >=
            kbase_tiler_heap_renew_interval() ||
         (renew_work && queue->kbase_tiler_work_count >= renew_work))) {
-      /* Heap generations are referenced only by graphics streams.  Preserve
-       * overlap with unrelated compute work instead of draining every
-       * subqueue before replacing the tiler heap. */
-      result = kbase_wait_graphics_targets(
-         queue, submit->kbase_target_seqnos, UINT64_MAX);
-      if (result != VK_SUCCESS)
-         return result;
-
+      /* Avoid a graphics drain on the normal path. Ring entries emitted
+       * before renewal retain their heap descriptor slot until completion. */
       result = kbase_renew_tiler_heap(queue);
-      if (result != VK_SUCCESS)
+
+      /* If a retired heap remains firmware-visible for four renewal budgets,
+       * apply backpressure once so memory use cannot grow without bound. */
+      const uint32_t interval = kbase_tiler_heap_renew_interval();
+      if (result == VK_INCOMPLETE &&
+          ((interval && queue->kbase_tiler_submit_count >= 4ull * interval) ||
+           (renew_work && queue->kbase_tiler_work_count / 4 >= renew_work))) {
+         uint64_t targets[PANVK_KBASE_SYNC_TARGET_COUNT] = {0};
+         targets[PANVK_SUBQUEUE_VERTEX_TILER] =
+            queue->subqueues[PANVK_SUBQUEUE_VERTEX_TILER].kbase.emitted_jobs;
+         targets[PANVK_SUBQUEUE_FRAGMENT] =
+            queue->subqueues[PANVK_SUBQUEUE_FRAGMENT].kbase.emitted_jobs;
+         result = kbase_wait_graphics_targets(queue, targets, UINT64_MAX);
+         if (result != VK_SUCCESS)
+            return result;
+         result = kbase_renew_tiler_heap(queue);
+      }
+
+      if (result < 0)
          return vk_queue_set_lost(&queue->vk,
                                   "kbase: tiler heap renewal failed");
 
-      queue->kbase_tiler_submit_count = 0;
-      queue->kbase_tiler_work_count = 0;
+      if (result == VK_SUCCESS) {
+         queue->kbase_tiler_submit_count = 0;
+         queue->kbase_tiler_work_count = 0;
+      }
    }
 
    return VK_SUCCESS;
