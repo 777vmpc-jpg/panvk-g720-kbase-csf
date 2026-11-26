@@ -12,6 +12,10 @@
 #include "panvk_device_memory.h"
 #include "panvk_entrypoints.h"
 
+#include "kmod/kbase_kmod.h"
+
+#include <unistd.h>
+
 #include "pan_props.h"
 
 #include "util/u_atomic.h"
@@ -487,6 +491,37 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
       to_panvk_physical_device(device->vk.physical);
 
    assert(handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+
+   /* A kbase UMM import allocates a temporary SAME_VA mapping.  Repeated
+    * query/free cycles for the same dma-buf can tear down kbase GPU PTEs and
+    * leave a later real import with a stale VA.  For our shareable kbase
+    * allocations the import flags are fixed (visible + coherent, uncached),
+    * so derive the compatible memory types without creating a GPU mapping. */
+   if (kbase_kmod_supports_dmabuf(device->kmod.dev)) {
+      if (fd < 0 || lseek(fd, 0, SEEK_END) <= 0)
+         return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+      const bool can_do_host_visible = true;
+      const bool can_do_host_coherent = true;
+      const bool can_do_host_cached = false;
+
+      pMemoryFdProperties->memoryTypeBits = 0;
+      for (uint32_t i = 0; i < phys_dev->memory.type_count; i++) {
+         VkMemoryPropertyFlags flags = phys_dev->memory.types[i].propertyFlags;
+         if (!can_do_host_visible &&
+             (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+            continue;
+         if (!can_do_host_coherent &&
+             (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+            continue;
+         if (!can_do_host_cached &&
+             (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
+            continue;
+
+         pMemoryFdProperties->memoryTypeBits |= BITFIELD_BIT(i);
+      }
+      return VK_SUCCESS;
+   }
 
    struct pan_kmod_bo *bo = pan_kmod_bo_import(device->kmod.dev, fd);
    if (!bo)
