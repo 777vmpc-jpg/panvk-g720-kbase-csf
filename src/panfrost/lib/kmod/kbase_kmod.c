@@ -70,6 +70,10 @@
 /* Forward declaration — the full definition is at the end of this file. */
 const struct pan_kmod_ops kbase_kmod_ops;
 
+/* Probe the complete DMA-HEAP -> kbase import -> exact-address alias path
+ * before advertising VK_EXT_map_memory_placed. */
+static bool kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev);
+
 /* -------------------------------------------------------------------------
  * Internal device / BO / VM objects
  * ---------------------------------------------------------------------- */
@@ -1494,14 +1498,55 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    kbase_dev_query_props(kbase_dev, props_buf, props_size);
    free(props_buf);
 
-   const char *dma_heap = getenv("PANVK_KBASE_DMA_HEAP");
-   if (!dma_heap || !dma_heap[0])
-      dma_heap = "/dev/dma_heap/system";
+   /* Android commonly exposes both cached and uncached system heaps.
+    * Try an explicit override first, then the standard heap names.  Keep
+    * O_RDONLY as the normal mode (the DMA-HEAP ioctl is allowed on it), with
+    * O_RDWR as a compatibility fallback for vendor kernels. */
+   const char *dma_heap_override = getenv("PANVK_KBASE_DMA_HEAP");
+   const char *dma_heaps[] = {
+      dma_heap_override,
+      "/dev/dma_heap/system",
+      "/dev/dma_heap/system-uncached",
+      "/dev/dma_heap/system_uncached",
+   };
 
-   kbase_dev->dma_heap_fd = open(dma_heap, O_RDONLY | O_CLOEXEC);
-   if (kbase_dev->dma_heap_fd < 0)
-      mesa_logd("kbase: dma-heap unavailable at %s: %s", dma_heap,
+   for (unsigned i = 0; i < ARRAY_SIZE(dma_heaps); i++) {
+      const char *path = dma_heaps[i];
+      if (!path || !path[0])
+         continue;
+
+      bool duplicate = false;
+      for (unsigned j = 0; j < i; j++) {
+         if (dma_heaps[j] && !strcmp(path, dma_heaps[j])) {
+            duplicate = true;
+            break;
+         }
+      }
+      if (duplicate)
+         continue;
+
+      kbase_dev->dma_heap_fd = open(path, O_RDONLY | O_CLOEXEC);
+      if (kbase_dev->dma_heap_fd < 0)
+         kbase_dev->dma_heap_fd = open(path, O_RDWR | O_CLOEXEC);
+
+      if (kbase_dev->dma_heap_fd >= 0) {
+         mesa_logi("kbase: opened DMA-HEAP %s", path);
+         break;
+      }
+
+      mesa_logd("kbase: cannot open DMA-HEAP %s: %s", path,
                 strerror(errno));
+   }
+
+   /* Merely opening /dev/dma_heap is not enough: Kakarot needs the buffer
+    * to be importable by kbase and mappable at the exact guest VA. */
+   if (kbase_dev->dma_heap_fd >= 0 &&
+       !kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
+      mesa_logw("kbase: DMA-HEAP opened but allocation/import/placed-alias "
+                "probe failed; disabling VK_EXT_map_memory_placed");
+      close(kbase_dev->dma_heap_fd);
+      kbase_dev->dma_heap_fd = -1;
+   }
 
    if (!kbase_dev->base.props.gpu_id) {
       mesa_loge("kbase: failed to determine GPU ID from properties");
@@ -2010,6 +2055,52 @@ kbase_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
       return munmap(host_addr, size);
 
    return 0;
+}
+
+/* Exercise the exact mechanism used by VK_EXT_map_memory_placed.  Reserve
+ * an address first so MAP_FIXED can only replace our own reservation, then
+ * verify that the placed alias sees writes made through the persistent map. */
+static bool
+kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
+{
+   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_dmabuf(dev, 4096, 0);
+   if (!bo) {
+      mesa_logw("kbase: DMA-HEAP allocation or KBASE_IOCTL_MEM_IMPORT probe failed");
+      return false;
+   }
+
+   size_t size = pan_kmod_bo_size(bo);
+   struct kbase_kmod_bo *kbase_bo =
+      container_of(bo, struct kbase_kmod_bo, base);
+   void *reserved = mmap(NULL, size, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+   if (reserved == MAP_FAILED) {
+      mesa_logw("kbase: could not reserve VA for DMA-BUF alias probe: %s",
+                strerror(errno));
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+
+   void *alias = kbase_kmod_bo_mmap(bo, PROT_READ | PROT_WRITE,
+                                    MAP_SHARED, reserved);
+   bool usable = alias == reserved;
+   if (usable) {
+      const uint32_t pattern = 0x6b626173;
+      *(volatile uint32_t *)kbase_bo->cpu_ptr = pattern;
+      usable = *(volatile uint32_t *)alias == pattern;
+      if (!usable)
+         mesa_logw("kbase: DMA-BUF placed alias did not share backing pages");
+      kbase_kmod_bo_munmap(bo, alias, size);
+   } else {
+      mesa_logw("kbase: DMA-BUF exact-address alias probe failed: %s",
+                strerror(errno));
+      munmap(reserved, size);
+   }
+
+   kbase_kmod_bo_free(bo);
+   mesa_logi("kbase: DMA-HEAP placed-memory probe %s",
+             usable ? "passed" : "failed");
+   return usable;
 }
 
 /* kbase does not expose per-BO fence objects.
