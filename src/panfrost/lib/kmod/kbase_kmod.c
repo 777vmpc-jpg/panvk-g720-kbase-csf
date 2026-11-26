@@ -1704,7 +1704,7 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    if (fd_path_len > 0 && (size_t)fd_path_len < sizeof(fd_path))
       fd_target_len = readlink(fd_path, fd_target, sizeof(fd_target) - 1);
    if (fd_target_len >= 0)
-      fd_target[fd_target_len] = '\\0';
+      fd_target[fd_target_len] = '\0';
 
    if (fstat(import_fd, &fd_stat) == 0) {
       mesa_logi("kbase: UMM fd identity: fd=%d mode=0%o dev=%" PRIuMAX
@@ -1844,10 +1844,10 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
       dev, NULL, alloc.fd, alloc.len, kmod_flags, false);
    if (bo)
       mesa_logd("kbase: dma-heap BO imported: size %" PRIu64 " bytes",
-                alloc.len);
+                (uint64_t)alloc.len);
    else
       mesa_loge("kbase: dma-heap BO import failed: size %" PRIu64 " bytes",
-                alloc.len);
+                (uint64_t)alloc.len);
    close(alloc.fd);
    return bo;
 }
