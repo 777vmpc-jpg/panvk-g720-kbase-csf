@@ -2081,7 +2081,7 @@ kbase_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
 static bool
 kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
 {
-   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_dmabuf(dev, 4096, 0);
+   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_dmabuf(dev, 65536, 0);
    if (!bo) {
       mesa_logw("kbase: DMA-HEAP allocation or KBASE_IOCTL_MEM_IMPORT probe failed");
       return false;
