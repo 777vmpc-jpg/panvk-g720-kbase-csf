@@ -450,6 +450,9 @@ setup_gralloc0_usage(VkFormat format, VkImageUsageFlags image_usage,
 
    *out_gralloc_usage = gralloc_usage;
 
+   mesa_logi("PANVK-ANDROID-DIAG gralloc0 format=%u image_usage=0x%x gralloc_usage=0x%x",
+             format, image_usage, gralloc_usage);
+
    return VK_SUCCESS;
 }
 
@@ -825,6 +828,12 @@ vk_image_usage_to_ahb_usage(const VkImageCreateFlags2KHR vk_create,
    /* No usage bits set - set at least one GPU usage. */
    if (ahb_usage == 0)
       ahb_usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+
+   if (vk_usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+      mesa_logi("PANVK-ANDROID-DIAG ahb create=0x%llx image_usage=0x%llx ahb_usage=0x%llx",
+                (unsigned long long)vk_create,
+                (unsigned long long)vk_usage,
+                (unsigned long long)ahb_usage);
 
    return ahb_usage;
 }
