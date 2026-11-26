@@ -2,6 +2,9 @@ name: Audit Faux123 v1.1.9 driver
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/audit-faux123-release.yml"
 
 permissions:
   contents: read
