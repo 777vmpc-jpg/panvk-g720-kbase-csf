@@ -152,14 +152,6 @@ panvk_per_arch(cmd_dispatch_prepare_tls)(
       .wls.size = cs->info.wls_size,
    };
 
-   /*
-    * Some Mali CSF GPUs need at least 4 KiB of per-thread TLS when a
-    * compute shader spills registers to scratch memory. Keep zero-TLS
-    * shaders allocation-free; only raise the size when spilling exists.
-    */
-   if (tlsinfo.tls.size)
-      tlsinfo.tls.size = MAX2(tlsinfo.tls.size, 4096);
-
    if (tlsinfo.wls.size) {
       unsigned core_id_range =
          pan_query_core_id_range(&phys_dev->kmod.dev->props);
@@ -181,14 +173,8 @@ panvk_per_arch(cmd_dispatch_prepare_tls)(
          return 0;
    }
 
-   /*
-    * Keep command-buffer TLS allocation in sync with the size emitted in
-    * this dispatch's TSD. Otherwise the descriptor can advertise 4 KiB
-    * per thread while the backing allocation is still sized for the
-    * shader's original TLS requirement.
-    */
    cmdbuf->state.tls.info.tls.size =
-      MAX2(tlsinfo.tls.size, cmdbuf->state.tls.info.tls.size);
+      MAX2(cs->info.tls_size, cmdbuf->state.tls.info.tls.size);
 
    if (!cmdbuf->state.tls.desc.gpu) {
       cmdbuf->state.tls.desc = panvk_cmd_alloc_desc(cmdbuf, LOCAL_STORAGE);
