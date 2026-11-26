@@ -12,6 +12,7 @@ on:
       - g720-development
       - auto-build-mc7-v1.1.9f
       - g720-mc7-faux-build
+      - g720-mc7-bc-emul
       - fix-kbase-dmabuf-size-import
       - fix-panvk-vertex-buffer-range-guard
       - panvk-mc7-build144-performance
@@ -191,6 +192,22 @@ jobs:
           WORK="$(awk '/KBASE_TILER_HEAP_RENEW_WORK / {print $3}' "$SOURCE")"
           echo "HEAP_RENEW_INTERVAL=$INTERVAL" >> "$GITHUB_ENV"
           echo "HEAP_RENEW_WORK=$WORK" >> "$GITHUB_ENV"
+
+      - name: Aplicar BC GPU compute decode e fixes de inicializacao
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/zenithblue-oss/panvk-kbase-android.git /tmp/panvk-kbase-android
+          git -C /tmp/panvk-kbase-android fetch --depth 1 origin 5b87b74d3e2580d5816e7f2c629f6f016a462f28
+          git -C /tmp/panvk-kbase-android checkout --detach 5b87b74d3e2580d5816e7f2c629f6f016a462f28
+          PATCH=/tmp/panvk-kbase-android/patches/csf-v11
+          for p in 019-crc-invalidate-undefined-clear.patch 022-bc-gpu-decode-emulation.patch 038-crc-init-kmod-munmap.patch 039-bc-gpu-decode-default.patch 040-bc-zero-initialized-decode.patch; do
+            echo "Checking $p"
+            git apply --check "$PATCH/$p"
+            git apply "$PATCH/$p"
+          done
+          git diff --check
+          echo "BC compute decode patch series applied"
 
       - name: Preparar script de compilacao
         shell: bash
