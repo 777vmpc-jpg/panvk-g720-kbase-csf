@@ -24,7 +24,7 @@
 #include "panvk_descriptor_set_layout.h"
 #include "panvk_physical_device.h"
 #include "panvk_wsi.h"
-#include "kbase_kmod.h"
+#include "kmod/kbase_kmod.h"
 
 #include "pan_format.h"
 #include "pan_props.h"
