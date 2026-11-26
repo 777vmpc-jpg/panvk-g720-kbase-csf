@@ -1161,6 +1161,18 @@ get_gpu_model(struct panvk_physical_device *device,
    return VK_SUCCESS;
 }
 
+/* Log the exact kernel-reported compressed texture capability mask. This is
+ * useful on mobile SoCs where individual BC/ETC/ASTC formats are optional. */
+static void
+log_compressed_texture_features(const struct panvk_physical_device *device)
+{
+   const uint32_t features =
+      pan_query_compressed_formats(&device->kmod.dev->props);
+
+   mesa_logi("panvk: compressed texture TEXTURE_FEATURES_0=0x%08x",
+             features);
+}
+
 VkResult
 panvk_physical_device_init(struct panvk_physical_device *device,
                            struct panvk_instance *instance,
@@ -1178,6 +1190,8 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    result = get_gpu_model(device, instance, &unknown_gpu);
    if (result != VK_SUCCESS)
       goto fail;
+
+   log_compressed_texture_features(device);
 
    switch (arch) {
    case 6:
@@ -1308,6 +1322,8 @@ panvk_physical_device_init_kbase(struct panvk_physical_device *device,
    result = get_gpu_model(device, instance, &unknown_gpu);
    if (result != VK_SUCCESS)
       goto fail_kbase;
+
+   log_compressed_texture_features(device);
 
    switch (arch) {
    case 6:
