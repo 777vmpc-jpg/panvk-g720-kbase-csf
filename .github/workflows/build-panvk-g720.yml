@@ -309,44 +309,6 @@ jobs:
           echo "Original Faux123 metadata and MC7 package metadata prepared."
           sha256sum packaging/faux123-v1.1.9/meta.json output/meta-faux123-v1.1.9.json output/meta.json
 
-      - name: Criar e validar pacote ADPKG
-        shell: bash
-        run: |
-          set -euo pipefail
-          PACKAGE="PanVK-faux123-v1.1.9-Mali-G720-MC7.adpkg.zip"
-          test -s output/meta.json
-          test -s output/libvulkan_panfrost.so
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          meta = json.loads(Path("output/meta.json").read_text())
-          required = ("schemaVersion", "name", "author", "packageVersion", "vendor", "driverVersion", "minApi", "libraryName")
-          missing = [key for key in required if key not in meta or meta[key] in (None, "")]
-          if missing:
-              raise SystemExit(f"Campos ADPKG ausentes: {missing}")
-          if meta["schemaVersion"] != 1 or meta["vendor"] != "Mesa":
-              raise SystemExit("Formato ADPKG inválido")
-          if meta["libraryName"] != "libvulkan_panfrost.so":
-              raise SystemExit("libraryName não corresponde à biblioteca empacotada")
-          PY
-          rm -f "output/$PACKAGE"
-          (cd output && zip -X "$PACKAGE" meta.json libvulkan_panfrost.so)
-          python3 - <<'PY'
-          import json, zipfile
-          from pathlib import Path
-          package = Path("output/PanVK-faux123-v1.1.9-Mali-G720-MC7.adpkg.zip")
-          with zipfile.ZipFile(package) as z:
-              names = z.namelist()
-              if sorted(names) != ["libvulkan_panfrost.so", "meta.json"]:
-                  raise SystemExit(f"Conteúdo/estrutura inesperados no ZIP: {names}")
-              meta = json.loads(z.read("meta.json"))
-              if meta["libraryName"] not in names:
-                  raise SystemExit("A biblioteca declarada não está na raiz do ZIP")
-          print(f"ADPKG validado: {package} ({package.stat().st_size} bytes)")
-          PY
-          sha256sum "output/$PACKAGE"
-          unzip -l "output/$PACKAGE"
-
       - name: Gerar informacoes do build
         run: |
           {
