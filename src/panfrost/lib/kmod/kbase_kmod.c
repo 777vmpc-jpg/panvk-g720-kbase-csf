@@ -1965,37 +1965,50 @@ kbase_kmod_bo_get_mmap_offset(struct pan_kmod_bo *bo)
    return (off_t)kbase_bo->gpu_va;
 }
 
-/* Return the CPU mapping established at allocation time.  A SAME_VA region
- * has exactly one CPU mapping (its address is the GPU VA), so we cannot
- * honor requests for a caller-chosen address. */
+/* Native SAME_VA BOs have one fixed CPU/GPU mapping. Shareable dma-buf
+ * BOs can additionally be aliased at the address requested by
+ * VK_EXT_map_memory_placed. */
 static void *
-kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, UNUSED int prot, UNUSED int flags,
+kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags,
                    void *host_addr)
 {
    struct kbase_kmod_bo *kbase_bo =
       container_of(bo, struct kbase_kmod_bo, base);
-
-   if (host_addr != NULL && host_addr != kbase_bo->cpu_ptr) {
-      mesa_loge("kbase: mapping a BO at a caller-chosen address is not "
-                "supported (SAME_VA)");
-      errno = ENOTSUP;
-      return MAP_FAILED;
-   }
 
    if (!kbase_bo->cpu_ptr) {
       errno = EINVAL;
       return MAP_FAILED;
    }
 
+   if (host_addr && host_addr != kbase_bo->cpu_ptr) {
+      if (kbase_bo->dmabuf_fd < 0) {
+         mesa_loge("kbase: placed mapping requires a dma-buf backed BO");
+         errno = ENOTSUP;
+         return MAP_FAILED;
+      }
+
+      void *alias = mmap(host_addr, bo->size, prot,
+                         (flags & ~MAP_PRIVATE) | MAP_SHARED | MAP_FIXED,
+                         kbase_bo->dmabuf_fd, 0);
+      if (alias == MAP_FAILED)
+         mesa_loge("kbase: dma-buf placed mmap failed: %s", strerror(errno));
+      return alias;
+   }
+
    return kbase_bo->cpu_ptr;
 }
 
-/* The mapping belongs to the BO and lives until bo_free: unmapping a
- * SAME_VA region would free its GPU mapping too. */
+/* A dma-buf alias is independent from the persistent GPU mapping. Native
+ * SAME_VA mappings must remain alive until BO destruction. */
 static int
-kbase_kmod_bo_munmap(UNUSED struct pan_kmod_bo *bo, UNUSED void *host_addr,
-                     UNUSED size_t size)
+kbase_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
 {
+   struct kbase_kmod_bo *kbase_bo =
+      container_of(bo, struct kbase_kmod_bo, base);
+
+   if (kbase_bo->dmabuf_fd >= 0 && host_addr != kbase_bo->cpu_ptr)
+      return munmap(host_addr, size);
+
    return 0;
 }
 
