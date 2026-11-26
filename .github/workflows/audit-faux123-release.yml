@@ -3,6 +3,8 @@ name: Audit Faux123 v1.1.9 driver
 on:
   workflow_dispatch:
   push:
+    branches:
+      - integrate-faux123-119-mc7
     paths:
       - ".github/workflows/audit-faux123-release.yml"
 
@@ -13,22 +15,35 @@ jobs:
   retrieve-driver:
     runs-on: ubuntu-latest
     steps:
-      - name: Download published driver ZIP
+      - name: Download published Faux123 1.1.9 package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p audit
+          set -euo pipefail
+          mkdir -p audit/original audit/extracted
           gh release download Novo \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "panvk_faux123_v1.1.9.adpkg.zip" \
-            --dir audit
-          test -s audit/panvk_faux123_v1.1.9.adpkg.zip
-          sha256sum audit/panvk_faux123_v1.1.9.adpkg.zip
-          unzip -l audit/panvk_faux123_v1.1.9.adpkg.zip
-      - name: Publish ZIP for inspection
+            --dir audit/original
+          ZIP="audit/original/panvk_faux123_v1.1.9.adpkg.zip"
+          test -s "$ZIP"
+          sha256sum "$ZIP" | tee audit/SHA256.txt
+          unzip -l "$ZIP" | tee audit/ARCHIVE-LIST.txt
+          unzip -oq "$ZIP" -d audit/extracted
+          find audit/extracted -maxdepth 3 -type f -printf '%P %s bytes\\n' | sort | tee audit/FILES.txt
+          if [ -f audit/extracted/meta.json ]; then
+            cat audit/extracted/meta.json | tee audit/FAUX123-META.json
+          fi
+          LIB="$(find audit/extracted -type f -name libvulkan_panfrost.so -print -quit)"
+          test -n "$LIB"
+          file "$LIB" | tee audit/ELF-INFO.txt
+          readelf -h "$LIB" | tee -a audit/ELF-INFO.txt
+          sha256sum "$LIB" | tee audit/LIBRARY-SHA256.txt
+          strings "$LIB" | grep -Ei 'faux123|Mesa|PanVK|1\\.1\\.9' | head -100 > audit/VERSION-STRINGS.txt || true
+      - name: Publish complete audit and untouched upstream package
         uses: actions/upload-artifact@v4
         with:
-          name: faux123-v1.1.9-driver-audit
-          path: audit/panvk_faux123_v1.1.9.adpkg.zip
+          name: faux123-v1.1.9-complete-audit
+          path: audit/
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
