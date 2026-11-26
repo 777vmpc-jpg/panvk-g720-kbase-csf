@@ -5,6 +5,7 @@ on:
   pull_request:
     branches:
       - g720-development
+      - panvk-mc7-build144-performance
   push:
     branches:
       - g720-development
