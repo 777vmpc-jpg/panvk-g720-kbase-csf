@@ -2088,13 +2088,27 @@ kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
    }
 
    int export_fd = kbase_kmod_bo_export_fd(bo);
-   if (export_fd < 0 || lseek(export_fd, 0, SEEK_END) <= 0) {
-      mesa_logw("kbase: DMA-BUF export probe failed: %s", strerror(errno));
-      if (export_fd >= 0)
-         close(export_fd);
+   if (export_fd < 0) {
+      int err = errno;
+      mesa_logw("kbase: DMA-BUF export probe failed at fd duplication: errno=%d (%s)",
+                err, strerror(err));
       kbase_kmod_bo_free(bo);
       return false;
    }
+
+   errno = 0;
+   off_t exported_size = lseek(export_fd, 0, SEEK_END);
+   if (exported_size <= 0) {
+      int err = errno;
+      mesa_logw("kbase: DMA-BUF size probe failed: lseek=%lld errno=%d (%s)",
+                (long long)exported_size, err,
+                err ? strerror(err) : "no errno (zero-sized dma-buf)");
+      close(export_fd);
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+   mesa_logi("kbase: DMA-BUF export probe passed: fd=%d size=%lld",
+             export_fd, (long long)exported_size);
    close(export_fd);
 
    size_t size = pan_kmod_bo_size(bo);
