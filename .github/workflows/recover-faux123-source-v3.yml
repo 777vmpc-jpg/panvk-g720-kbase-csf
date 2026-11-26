@@ -1,0 +1,108 @@
+name: Recover Faux123 v1.1.9 source inputs (v3)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [faux123-source-recovery]
+    paths:
+      - .github/workflows/recover-faux123-source-v3.yml
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout recovery workflow
+        uses: actions/checkout@v4
+
+      - name: Fetch exact public source revision referenced by Faux123 metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/zenithblue-oss/panvk-kbase-android.git recovery-source
+          git -C recovery-source fetch --depth 1 origin 5b87b74d3e2580d5816e7f2c629f6f016a462f28
+          git -C recovery-source sparse-checkout init --cone
+          git -C recovery-source sparse-checkout set patches scripts profiles docs
+          git -C recovery-source checkout --detach 5b87b74d3e2580d5816e7f2c629f6f016a462f28
+          test "$(git -C recovery-source rev-parse HEAD)" = "5b87b74d3e2580d5816e7f2c629f6f016a462f28"
+          test "$(python3 -c "import json;print(json.load(open('recovery-source/sources.lock'))['mesaCommit'])")" = "5a07217f034b3e50d8c7c7794f97a2df1742613b"
+          test -f recovery-source/profiles/g720-v12-csf.json
+          git -C recovery-source log -1 --format='%H %s' > recovery-source/RECOVERED-COMMIT.txt
+
+      - name: Fetch and pin the Mesa source base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p recovery-source/work/mesa
+          git -C recovery-source/work/mesa init
+          git -C recovery-source/work/mesa remote add origin https://gitlab.freedesktop.org/mesa/mesa.git
+          git -C recovery-source/work/mesa fetch --depth 1 origin 5a07217f034b3e50d8c7c7794f97a2df1742613b
+          git -C recovery-source/work/mesa checkout --detach FETCH_HEAD
+          test "$(git -C recovery-source/work/mesa rev-parse HEAD)" = "5a07217f034b3e50d8c7c7794f97a2df1742613b"
+
+      - name: Apply the recovered Android and Mali G720 v12 CSF source series
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd recovery-source
+          ./scripts/apply-patches.sh --profile g720-v12-csf --mesa work/mesa
+          git -C work/mesa diff --check
+          git -C work/mesa diff --binary > RECOVERED-MESA-PATCHSET.diff
+          python3 scripts/compute-patch-series-id.py --profile g720-v12-csf > RECOVERED-PATCH-SERIES-ID.txt
+          find patches -type f -name '*.patch' | sort > RECOVERED-PATCH-INVENTORY.txt
+          test -s RECOVERED-MESA-PATCHSET.diff
+          test -s RECOVERED-PATCH-INVENTORY.txt
+
+      - name: Fetch original Faux123 v1.1.9 binary for provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p recovery-source/evidence
+          gh release download Novo --repo "$GITHUB_REPOSITORY" \
+            --pattern "panvk_faux123_v1.1.9.adpkg.zip" \
+            --dir recovery-source/evidence
+          sha256sum recovery-source/evidence/*.zip > recovery-source/evidence/SHA256SUMS
+
+      - name: Write recovery report and package complete open source inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > recovery-source/FAUX123-RECOVERY-REPORT.md <<'EOF'
+          # PanVK Faux123 v1.1.9 — source recovery
+
+          ## Exact provenance recovered
+          - Original Faux123 v1.1.9 driver package is included under evidence/.
+          - Public source repository revision recorded by the binary metadata: zenithblue-oss/panvk-kbase-android @ 5b87b74d3e2580d5816e7f2c629f6f016a462f28.
+          - Mesa base pinned by that source tree: 5a07217f034b3e50d8c7c7794f97a2df1742613b (26.3.0-devel).
+          - G720 target patch profile: g720-v12-csf.
+          - The exact patch application result and resulting Mesa diff are included.
+
+          ## Limitation
+          The binary metadata also names a separate panvk-faux123 revision (b0783e301977), patch-series ID (8085f5702e9a), and tree ID (420f3b5f0d06). Those inputs are not present in the public source snapshot. This archive therefore recovers the exact public source inputs and reconstructs the reproducible G720-v12 patch stack, but does not claim byte-for-byte recovery of private Faux123 overlays.
+
+          ## Included
+          - Public source repository inputs (patches, scripts, profiles, documentation) at the exact referenced commit.
+          - Mesa source at the exact pinned commit with the G720-v12-CSF patch series applied.
+          - Binary diff of applied Mesa changes, patch inventory, series identifier and provenance.
+          - Original Faux123 v1.1.9 driver package.
+          EOF
+          cd recovery-source
+          tar --exclude='.git' --exclude='work/mesa/.git' -czf ../PanVK-Faux123-v1.1.9-Source-Recovery.tar.gz .
+          cd ..
+          sha256sum PanVK-Faux123-v1.1.9-Source-Recovery.tar.gz > PanVK-Faux123-v1.1.9-Source-Recovery.tar.gz.sha256
+          ls -lh PanVK-Faux123-v1.1.9-Source-Recovery.tar.gz
+
+      - name: Publish source recovery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PanVK-Faux123-v1.1.9-Source-Recovery
+          path: |
+            PanVK-Faux123-v1.1.9-Source-Recovery.tar.gz
+            PanVK-Faux123-v1.1.9-Source-Recovery.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
