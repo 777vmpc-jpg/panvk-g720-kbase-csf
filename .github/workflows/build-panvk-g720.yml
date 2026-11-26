@@ -7,6 +7,7 @@ on:
       - main
       - fix-wayland-egl-backend-mc7
       - integrate-faux123-192-mc7
+      - kakarot-placed-memory
 
 permissions:
   contents: read
