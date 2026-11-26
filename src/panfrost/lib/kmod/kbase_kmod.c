@@ -2113,12 +2113,18 @@ kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
                                     MAP_SHARED, reserved);
    bool usable = alias == reserved;
    if (usable) {
-      const uint32_t pattern = 0x6b626173;
-      *(volatile uint32_t *)kbase_bo->cpu_ptr = pattern;
-      usable = *(volatile uint32_t *)alias == pattern;
+      const uint32_t pattern_a = 0x6b626173;
+      const uint32_t pattern_b = 0x706c6163;
+      *(volatile uint32_t *)kbase_bo->cpu_ptr = pattern_a;
+      usable = *(volatile uint32_t *)alias == pattern_a;
+      if (usable) {
+         *(volatile uint32_t *)alias = pattern_b;
+         usable = *(volatile uint32_t *)kbase_bo->cpu_ptr == pattern_b;
+      }
       if (!usable)
-         mesa_logw("kbase: DMA-BUF placed alias did not share backing pages");
-      kbase_kmod_bo_munmap(bo, alias, size);
+         mesa_logw("kbase: DMA-BUF placed alias is not bidirectionally coherent");
+      if (kbase_kmod_bo_munmap(bo, alias, size))
+         usable = false;
    } else {
       mesa_logw("kbase: DMA-BUF exact-address alias probe failed: %s",
                 strerror(errno));
