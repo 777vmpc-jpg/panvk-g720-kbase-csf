@@ -31,6 +31,7 @@ jobs:
             cmake ninja-build \
             bison flex \
             clang llvm llvm-dev lld \
+            libllvmspirvlib-18-dev \
             libclang-dev \
             libclc-18 libclc-18-dev \
             libdrm-dev libelf-dev \
@@ -55,6 +56,7 @@ jobs:
           set -euo pipefail
           pkg-config --modversion wayland-client
           pkg-config --modversion wayland-egl-backend
+          pkg-config --modversion LLVMSPIRVLib
           test -f /usr/include/wayland-egl-backend.h
 
       - name: Instalar Android SDK e NDK
