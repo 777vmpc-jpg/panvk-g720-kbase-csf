@@ -2746,7 +2746,7 @@ kbase_wait_graphics_targets(
    return VK_SUCCESS;
 }
 
-/* SYNC-A3 test-only collector.
+/* SYNC-A3 diagnostic collector (CPU fallback by default).
  *
  * Only payloads created by panvk_queue_submit_process_signals_kbase() are
  * eligible: both callbacks must match the internal queue-target functions.
