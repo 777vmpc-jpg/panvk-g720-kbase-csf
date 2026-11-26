@@ -8,6 +8,7 @@ on:
       - fix-wayland-egl-backend-mc7
       - integrate-faux123-192-mc7
       - kakarot-placed-memory
+      - kakarot-display-diagnostics
 
 permissions:
   contents: read
@@ -248,6 +249,12 @@ jobs:
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
               env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
           PY
+
+      - name: Instrumentar apresentacao Android e submissao Kbase
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/instrument-display-path.py
 
       - name: Preparar script de compilacao
         shell: bash
