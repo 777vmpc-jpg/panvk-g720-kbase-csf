@@ -140,14 +140,16 @@ jobs:
         with:
           targets: aarch64-linux-android
 
-      - name: Instalar bindgen para o Mesa
+      - name: Instalar bindgen e cbindgen para o Mesa
         shell: bash
         run: |
           set -euo pipefail
           cargo install --locked bindgen-cli --version 0.72.1
+          cargo install --locked cbindgen
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
           "$HOME/.cargo/bin/bindgen" --version
+          "$HOME/.cargo/bin/cbindgen" --version
 
       - name: Verificar ferramentas
         run: |
@@ -158,6 +160,7 @@ jobs:
           rustc --version
           cargo --version
           bindgen --version
+          cbindgen --version
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
 
       - name: Verificar codigo-fonte
