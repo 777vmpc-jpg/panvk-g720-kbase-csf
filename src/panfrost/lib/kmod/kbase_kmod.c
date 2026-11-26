@@ -2147,11 +2147,11 @@ kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
           * requires aliases to support page protection changes as well as
           * bidirectional visibility.  Keep this probe on a page inside the
           * reserved mapping so it cannot affect unrelated process memory. */
-         if (mprotect((char *)alias + page_size, page_size, PROT_READ)) {
+         if (mprotect((char *)alias + 4096, 4096, PROT_READ)) {
             mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ) failed: %s",
                       strerror(errno));
             usable = false;
-         } else if (mprotect((char *)alias + page_size, page_size,
+         } else if (mprotect((char *)alias + 4096, 4096,
                              PROT_READ | PROT_WRITE)) {
             mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ|PROT_WRITE) "
                       "restore failed: %s", strerror(errno));
