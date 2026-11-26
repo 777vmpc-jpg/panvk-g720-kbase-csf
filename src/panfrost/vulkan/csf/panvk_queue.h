@@ -97,6 +97,9 @@ struct panvk_subqueue {
       uint32_t last_flush_id;
       uint64_t last_stream_addr;
 
+      /* TILER_HEAP descriptor currently programmed by this graphics ring. */
+      uint64_t heap_desc;
+
       struct panvk_priv_mem init_cs;
       uint64_t init_stream_addr;
       uint32_t init_stream_size;
@@ -138,6 +141,8 @@ struct panvk_gpu_queue {
    } kbase_seqnos;
    uint32_t kbase_tiler_submit_count;
    uint64_t kbase_tiler_work_count;
+   /* Active descriptor slot; the other slot remains valid for in-flight jobs. */
+   uint32_t kbase_heap_slot;
    /* Tiler heap context retired by the last heap renewal.  The firmware CS
     * HEAP_SET registers keep pointing at the old context until each graphics
     * subqueue executes its next ring entry, so the context is only
