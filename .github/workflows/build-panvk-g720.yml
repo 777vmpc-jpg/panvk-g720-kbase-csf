@@ -11,6 +11,7 @@ on:
     branches:
       - g720-development
       - auto-build-mc7-v1.1.9f
+      - g720-mc7-faux-build
       - fix-kbase-dmabuf-size-import
       - fix-panvk-vertex-buffer-range-guard
       - panvk-mc7-build144-performance
