@@ -34,6 +34,7 @@
  *    memory management.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/dma-heap.h>
@@ -1550,6 +1551,65 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
       kbase_dev->dma_heap_fd = -1;
    }
 
+   /* Vendor Android builds may expose usable heaps under names that are
+    * not part of the common system/system-uncached set. Enumerate the
+    * directory only after the preferred paths fail. Every candidate still
+    * has to pass DMA_HEAP_ALLOC, KBASE import, export, fixed-address alias,
+    * bidirectional visibility and mprotect before it can be selected. */
+   if (kbase_dev->dma_heap_fd < 0) {
+      DIR *heap_dir = opendir("/dev/dma_heap");
+      if (heap_dir) {
+         struct dirent *entry;
+         while (kbase_dev->dma_heap_fd < 0 &&
+                (entry = readdir(heap_dir)) != NULL) {
+            if (entry->d_name[0] == '.')
+               continue;
+
+            char path[256];
+            int len = snprintf(path, sizeof(path), "/dev/dma_heap/%s",
+                               entry->d_name);
+            if (len < 0 || (size_t)len >= sizeof(path))
+               continue;
+
+            bool duplicate = false;
+            for (unsigned i = 0; i < ARRAY_SIZE(dma_heaps); i++) {
+               if (dma_heaps[i] && !strcmp(path, dma_heaps[i])) {
+                  duplicate = true;
+                  break;
+               }
+            }
+            if (duplicate)
+               continue;
+
+            int heap_fd = open(path, O_RDONLY | O_CLOEXEC);
+            if (heap_fd < 0)
+               heap_fd = open(path, O_RDWR | O_CLOEXEC);
+            if (heap_fd < 0) {
+               mesa_logd("kbase: cannot open discovered DMA-HEAP %s: %s",
+                         path, strerror(errno));
+               continue;
+            }
+
+            kbase_dev->dma_heap_fd = heap_fd;
+            mesa_logi("kbase: testing discovered DMA-HEAP %s", path);
+            if (kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
+               mesa_logi("kbase: selected discovered DMA-HEAP %s for placed memory",
+                         path);
+               break;
+            }
+
+            mesa_logw("kbase: discovered DMA-HEAP %s failed placed-memory "
+                      "validation", path);
+            close(kbase_dev->dma_heap_fd);
+            kbase_dev->dma_heap_fd = -1;
+         }
+         closedir(heap_dir);
+      } else {
+         mesa_logd("kbase: cannot enumerate /dev/dma_heap: %s",
+                   strerror(errno));
+      }
+   }
+
    if (kbase_dev->dma_heap_fd < 0)
       mesa_logw("kbase: no DMA-HEAP passed allocation/import/placed-alias "
                 "validation; VK_EXT_map_memory_placed remains disabled");
@@ -1740,7 +1800,10 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    };
 
    if (ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req)) {
-      mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: %s", strerror(errno));
+      mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: errno=%d (%s), "
+                "fd=%d size=%" PRIu64 " flags=0x%" PRIx64,
+                errno, strerror(errno), kbase_bo->dmabuf_fd, size,
+                import_flags);
       goto err_close_dmabuf;
    }
 
@@ -1753,8 +1816,10 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd,
            req.out.gpu_va);
    if (kbase_bo->gpu_mapping == MAP_FAILED) {
-      mesa_loge("kbase: mmap of imported dma-buf failed: %s",
-                strerror(errno));
+      mesa_loge("kbase: mmap of imported dma-buf failed: errno=%d (%s), "
+                "cookie=0x%" PRIx64 " flags=0x%" PRIx64 " pages=%" PRIu64,
+                errno, strerror(errno), req.out.gpu_va, req.out.flags,
+                req.out.va_pages);
       kbase_bo->gpu_mapping = NULL;
       struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
       ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
@@ -1766,8 +1831,9 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
          mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED,
               kbase_bo->dmabuf_fd, 0);
       if (kbase_bo->cpu_ptr == MAP_FAILED) {
-         mesa_loge("kbase: CPU mmap of imported dma-buf failed: %s",
-                   strerror(errno));
+         mesa_loge("kbase: CPU mmap of imported dma-buf failed: errno=%d (%s), "
+                   "fd=%d size=%" PRIu64,
+                   errno, strerror(errno), kbase_bo->dmabuf_fd, bo_size);
          kbase_bo->cpu_ptr = NULL;
          goto err_unmap_gpu;
       }
@@ -1811,7 +1877,9 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
    };
 
    if (ioctl(kbase_dev->dma_heap_fd, DMA_HEAP_IOCTL_ALLOC, &alloc)) {
-      mesa_loge("kbase: DMA_HEAP_IOCTL_ALLOC failed: %s", strerror(errno));
+      mesa_loge("kbase: DMA_HEAP_IOCTL_ALLOC failed: errno=%d (%s), "
+                "heap_fd=%d size=%" PRIu64,
+                errno, strerror(errno), kbase_dev->dma_heap_fd, alloc.len);
       return NULL;
    }
 
