@@ -2005,7 +2005,11 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       kbase_bo->owns_cpu_mapping = true;
    }
 
-   kbase_bo->gpu_va = (uintptr_t)kbase_bo->gpu_mapping;
+   /* Keep the kernel-assigned GPU VA distinct from the userspace address
+    * returned by mmap().  The latter is only the CPU mapping; MEM_SYNC,
+    * MEM_FREE and kbase mmap offsets must use req.out.gpu_va.
+    */
+   kbase_bo->gpu_va = req.out.gpu_va;
    uint32_t handle = p_atomic_inc_return(&kbase_dev->next_handle);
    uint32_t flags = kmod_flags;
    if (external_import)
