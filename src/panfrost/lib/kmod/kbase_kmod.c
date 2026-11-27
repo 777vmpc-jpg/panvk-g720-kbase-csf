@@ -2005,11 +2005,22 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       kbase_bo->owns_cpu_mapping = true;
    }
 
-   /* Keep the kernel-assigned GPU VA distinct from the userspace address
-    * returned by mmap().  The latter is only the CPU mapping; MEM_SYNC,
-    * MEM_FREE and kbase mmap offsets must use req.out.gpu_va.
+   /* MEM_IMPORT may return a cookie rather than a final GPU VA.
+    * BASE_MEM_NEED_MMAP means mmap(cookie) is required to bind the imported
+    * region in the shared VA zone; for that case the address returned by
+    * the kbase-fd mmap is the actual GPU VA.  The separate dma-buf mapping
+    * in cpu_ptr is only for CPU access on kernels whose UMM mapping rejects
+    * CPU faults.  Without NEED_MMAP, MEM_IMPORT already returned a real VA.
     */
-   kbase_bo->gpu_va = req.out.gpu_va;
+   kbase_bo->gpu_va = (req.out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP))
+                         ? (uintptr_t)kbase_bo->gpu_mapping
+                         : req.out.gpu_va;
+   kbase_diag("MEM_IMPORT VA tracking: cookie=0x%" PRIx64
+              " returned_flags=0x%" PRIx64 " gpu_mapping=%p cpu_mapping=%p"
+              " final_gpu_va=0x%" PRIx64,
+              (uint64_t)req.out.gpu_va, (uint64_t)req.out.flags,
+              kbase_bo->gpu_mapping, kbase_bo->cpu_ptr,
+              (uint64_t)kbase_bo->gpu_va);
    uint32_t handle = p_atomic_inc_return(&kbase_dev->next_handle);
    uint32_t flags = kmod_flags;
    if (external_import)
