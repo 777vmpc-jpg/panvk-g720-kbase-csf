@@ -1818,8 +1818,8 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    if (kbase_bo->gpu_mapping == MAP_FAILED) {
       mesa_loge("kbase: mmap of imported dma-buf failed: errno=%d (%s), "
                 "cookie=0x%" PRIx64 " flags=0x%" PRIx64 " pages=%" PRIu64,
-                errno, strerror(errno), req.out.gpu_va, req.out.flags,
-                req.out.va_pages);
+                errno, strerror(errno), (uint64_t)req.out.gpu_va,
+                (uint64_t)req.out.flags, (uint64_t)req.out.va_pages);
       kbase_bo->gpu_mapping = NULL;
       struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
       ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
@@ -1879,7 +1879,8 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
    if (ioctl(kbase_dev->dma_heap_fd, DMA_HEAP_IOCTL_ALLOC, &alloc)) {
       mesa_loge("kbase: DMA_HEAP_IOCTL_ALLOC failed: errno=%d (%s), "
                 "heap_fd=%d size=%" PRIu64,
-                errno, strerror(errno), kbase_dev->dma_heap_fd, alloc.len);
+                errno, strerror(errno), kbase_dev->dma_heap_fd,
+                (uint64_t)alloc.len);
       return NULL;
    }
 
