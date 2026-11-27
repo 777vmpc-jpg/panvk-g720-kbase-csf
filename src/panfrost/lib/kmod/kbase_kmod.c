@@ -1984,7 +1984,10 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
    struct native_handle {
       int version, num_fds, num_ints, data[];
    };
-   void *lib = dlopen("libnativewindow.so", RTLD_NOW | RTLD_LOCAL);
+   /* AHardwareBuffer NDK entry points are exported by libandroid.so.
+    * libnativewindow.so is the implementation dependency, not the NDK API
+    * library; looking there makes this fallback unavailable on Android. */
+   void *lib = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
    int (*ahb_alloc)(const struct ahb_desc *, void **) =
       lib ? dlsym(lib, "AHardwareBuffer_allocate") : NULL;
    void (*ahb_release)(void *) =
@@ -1998,47 +2001,72 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
    }
 
    const uint64_t len = ALIGN_POT(size, 4096);
+   if (len > UINT32_MAX)
+      return NULL;
+
    const uint64_t cpu = (kmod_flags & PAN_KMOD_BO_FLAG_WB_MMAP)
                            ? 0x33 /* CPU_READ_OFTEN | CPU_WRITE_OFTEN */
                            : 0x22 /* CPU_READ_RARELY | CPU_WRITE_RARELY */;
    struct ahb_desc desc = {
-      .width = len, .height = 1, .layers = 1,
+      .width = (uint32_t)len, .height = 1, .layers = 1,
       .format = 0x21 /* AHARDWAREBUFFER_FORMAT_BLOB */,
       .usage = cpu | (1ull << 24) /* GPU_DATA_BUFFER */,
    };
    void *ahb = NULL;
 
-   if (len > UINT32_MAX)
-      return NULL;
    if (ahb_alloc(&desc, &ahb)) {
       desc.usage = cpu;
       if (ahb_alloc(&desc, &ahb)) {
          mesa_logw("kbase: Gralloc BLOB allocation of %" PRIu64
                    " bytes failed", len);
+         dlclose(lib);
          return NULL;
       }
    }
 
    const struct native_handle *h = ahb_handle(ahb);
    struct pan_kmod_bo *bo = NULL;
+   if (!h) {
+      mesa_logw("kbase: AHardwareBuffer_getNativeHandle returned NULL");
+   } else {
+      mesa_logd("kbase: Gralloc BLOB native handle has %d fds and %d ints",
+                h->num_fds, h->num_ints);
+   }
+
+   /* Do not identify dma-bufs by their /proc/self/fd symlink text: vendor
+    * kernels and gralloc implementations use different names.  The native
+    * handle's first num_fds entries are file descriptors; try each one and
+    * let KBASE_IOCTL_MEM_IMPORT validate it.  This also handles handles
+    * where metadata and pixel/buffer fds appear in different orders. */
    for (int i = 0; h && i < h->num_fds && !bo; i++) {
-      char path[32], link[64] = "";
-      snprintf(path, sizeof(path), "/proc/self/fd/%d", h->data[i]);
-      if (readlink(path, link, sizeof(link) - 1) > 0 &&
-          (!strncmp(link, "/dmabuf:", 8) ||
-           !strcmp(link, "anon_inode:dmabuf"))) {
-         mesa_logd("kbase: trying Gralloc dma-buf fd %d (%s)", h->data[i],
-                   link);
-         bo = kbase_kmod_import_dmabuf(dev, NULL, h->data[i], len,
-                                       kmod_flags, false);
+      int fd = h->data[i];
+      char path[32], link[128] = "";
+      snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+      ssize_t link_len = readlink(path, link, sizeof(link) - 1);
+      if (link_len >= 0)
+         link[link_len] = '\0';
+
+      if (fcntl(fd, F_GETFD) < 0) {
+         mesa_logw("kbase: Gralloc native-handle fd[%d]=%d is invalid: %s",
+                   i, fd, strerror(errno));
+         continue;
       }
+
+      mesa_logd("kbase: trying Gralloc native-handle fd[%d]=%d (%s)",
+                i, fd, link_len >= 0 ? link : "unresolved");
+      errno = 0;
+      bo = kbase_kmod_import_dmabuf(dev, NULL, fd, len, kmod_flags, false);
+      if (!bo)
+         mesa_logw("kbase: Gralloc fd[%d] import failed: errno=%d (%s)",
+                   i, errno, strerror(errno));
    }
 
    /* The import owns a duplicated dma-buf fd, so the AHardwareBuffer can
     * be released immediately. */
    ahb_release(ahb);
+   dlclose(lib);
    if (!bo)
-      mesa_logw("kbase: Gralloc BLOB had no importable dma-buf fd");
+      mesa_logw("kbase: no Gralloc native-handle fd passed KBASE import");
    return bo;
 #else
    return NULL;
