@@ -10,6 +10,7 @@ on:
       - kakarot-placed-memory
       - kakarot-display-diagnostics
       - kakarot-ahb-libandroid-fdprobe
+      - mc7-botw-peanuts-placed-vulkan14
 
 permissions:
   contents: read
@@ -332,10 +333,19 @@ jobs:
             sha256sum output/libvulkan_panfrost.so
           } > output/BUILD-INFO.txt
 
+      - name: Validate ARM64 ICD and package
+        run: |
+          set -euo pipefail
+          readelf -h output/libvulkan_panfrost.so | grep AArch64
+          readelf -Ws output/libvulkan_panfrost.so | grep -E 'vk_icdGetInstanceProcAddr|vkGetInstanceProcAddr' > output/ICD-exports.txt
+          grep -nE 'memoryMapPlaced|VK_MEMORY_MAP_PLACED_BIT_EXT' src/panfrost/vulkan/panvk_device_memory.c > output/placed-memory-source.txt
+          (cd output && zip PanVK-MC7-BOTW-Peanuts-test.adpkg.zip libvulkan_panfrost.so meta.json)
+          unzip -t output/PanVK-MC7-BOTW-Peanuts-test.adpkg.zip
+
       - name: Publicar biblioteca compilada
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-MC7-ARM64
+          name: PanVK-MC7-BOTW-Peanuts-test
           path: output/
           if-no-files-found: error
           retention-days: 30
