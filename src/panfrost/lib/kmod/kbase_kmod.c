@@ -40,6 +40,7 @@
 #include <linux/dma-heap.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <poll.h>
@@ -79,6 +80,41 @@ const struct pan_kmod_ops kbase_kmod_ops;
  * before advertising VK_EXT_map_memory_placed. */
 static bool kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev);
 static bool kbase_kmod_probe_ahb(struct pan_kmod_dev *dev);
+
+/* Peanuts Native does not consistently package Mesa's normal log stream.
+ * Mirror the memory-probe diagnostics to the path explicitly supplied by
+ * the launcher, flushing each line so a crash cannot discard the evidence. */
+static void
+kbase_diag(const char *fmt, ...)
+{
+   char message[1024];
+   va_list ap;
+   va_start(ap, fmt);
+   vsnprintf(message, sizeof(message), fmt, ap);
+   va_end(ap);
+
+   mesa_logi("kbase-diag: %s", message);
+
+   const char *path = getenv("PANVK_KBASE_DIAG_FILE");
+   if (!path || !path[0])
+      path = getenv("MESA_LOG_FILE");
+
+   if (path && path[0]) {
+      FILE *file = fopen(path, "a");
+      if (file) {
+         fprintf(file, "[panvk-kbase] %s\\n", message);
+         fflush(file);
+         fclose(file);
+      } else {
+         fprintf(stderr, "[panvk-kbase] cannot append %s: %s\\n",
+                 path, strerror(errno));
+         fflush(stderr);
+      }
+   } else {
+      fprintf(stderr, "[panvk-kbase] %s\\n", message);
+      fflush(stderr);
+   }
+}
 
 /* -------------------------------------------------------------------------
  * Internal device / BO / VM objects
@@ -1472,6 +1508,9 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    kbase_dev->next_handle = 1;
    kbase_dev->dma_heap_fd = -1;
    kbase_dev->kcpu.fence_fd = -1;
+   kbase_diag("device init: CSF=%d, MESA_LOG_FILE=%s, PANVK_KBASE_DIAG_FILE=%s",
+              is_csf, getenv("MESA_LOG_FILE") ? getenv("MESA_LOG_FILE") : "(unset)",
+              getenv("PANVK_KBASE_DIAG_FILE") ? getenv("PANVK_KBASE_DIAG_FILE") : "(unset)");
    simple_mtx_init(&kbase_dev->kcpu.lock, mtx_plain);
    simple_mtx_init(&kbase_dev->sync_exports.lock, mtx_plain);
    kbase_dev->sync_exports.head = NULL;
@@ -1540,18 +1579,23 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
          heap_fd = open(path, O_RDWR | O_CLOEXEC);
 
       if (heap_fd < 0) {
+         kbase_diag("DMA-HEAP open failed: path=%s errno=%d (%s)",
+                    path, errno, strerror(errno));
          mesa_logd("kbase: cannot open DMA-HEAP %s: %s", path,
                    strerror(errno));
          continue;
       }
 
       kbase_dev->dma_heap_fd = heap_fd;
+      kbase_diag("testing DMA-HEAP: path=%s fd=%d", path, heap_fd);
       mesa_logi("kbase: testing DMA-HEAP %s", path);
       if (kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
+         kbase_diag("DMA-HEAP selected: path=%s fd=%d", path, heap_fd);
          mesa_logi("kbase: selected DMA-HEAP %s for placed memory", path);
          break;
       }
 
+      kbase_diag("DMA-HEAP full probe failed: path=%s; continuing", path);
       mesa_logw("kbase: DMA-HEAP %s failed the full placed-memory probe; "
                 "trying the next heap", path);
       close(kbase_dev->dma_heap_fd);
@@ -1618,6 +1662,7 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    }
 
    if (kbase_dev->dma_heap_fd < 0) {
+      kbase_diag("all DMA-HEAP candidates failed; entering AHardwareBuffer fallback");
       kbase_dev->ahb_shareable = kbase_kmod_probe_ahb(&kbase_dev->base);
       if (kbase_dev->ahb_shareable)
          mesa_logi("kbase: Gralloc AHardwareBuffer selected for placed memory");
@@ -1875,6 +1920,10 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    }
 
    if (import_ret) {
+      kbase_diag("MEM_IMPORT failed: errno=%d (%s) fd=%d size=%" PRIu64
+                 " flags=0x%" PRIx64 " ABI-layout=%u",
+                 errno, strerror(errno), kbase_bo->dmabuf_fd, size,
+                 import_flags, p_atomic_read(&mem_import_layout));
       mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: errno=%d (%s), "
                 "fd=%d size=%" PRIu64 " flags=0x%" PRIx64
                 " layout=%u",
@@ -1995,6 +2044,10 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
    const struct native_handle *(*ahb_handle)(const void *) =
       lib ? dlsym(lib, "AHardwareBuffer_getNativeHandle") : NULL;
 
+   kbase_diag("AHB API load: libandroid.so=%s allocate=%s release=%s nativeHandle=%s",
+              lib ? "loaded" : "FAILED",
+              ahb_alloc ? "yes" : "no", ahb_release ? "yes" : "no",
+              ahb_handle ? "yes" : "no");
    if (!ahb_alloc || !ahb_release || !ahb_handle) {
       mesa_logw("kbase: Gralloc AHardwareBuffer API unavailable in libandroid.so");
       if (lib)
@@ -2018,9 +2071,15 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
    };
    void *ahb = NULL;
 
-   if (ahb_alloc(&desc, &ahb)) {
+   int ahb_ret = ahb_alloc(&desc, &ahb);
+   kbase_diag("AHB BLOB allocation attempt 1: result=%d size=%" PRIu64
+              " usage=0x%" PRIx64, ahb_ret, len, desc.usage);
+   if (ahb_ret) {
       desc.usage = cpu;
-      if (ahb_alloc(&desc, &ahb)) {
+      ahb_ret = ahb_alloc(&desc, &ahb);
+      kbase_diag("AHB BLOB allocation attempt 2: result=%d size=%" PRIu64
+                 " usage=0x%" PRIx64, ahb_ret, len, desc.usage);
+      if (ahb_ret) {
          mesa_logw("kbase: Gralloc BLOB allocation of %" PRIu64
                    " bytes failed", len);
          dlclose(lib);
@@ -2033,6 +2092,7 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
    if (!h) {
       mesa_logw("kbase: AHardwareBuffer_getNativeHandle returned NULL");
    } else {
+      kbase_diag("AHB native handle: fds=%d ints=%d", h->num_fds, h->num_ints);
       mesa_logd("kbase: Gralloc BLOB native handle has %d fds and %d ints",
                 h->num_fds, h->num_ints);
    }
@@ -2060,6 +2120,9 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
                 i, fd, link_len >= 0 ? link : "unresolved");
       errno = 0;
       bo = kbase_kmod_import_dmabuf(dev, NULL, fd, len, kmod_flags, false);
+      kbase_diag("AHB fd[%d]=%d import %s%s", i, fd,
+                 bo ? "PASSED" : "FAILED",
+                 bo ? "" : strerror(errno));
       if (!bo)
          mesa_logw("kbase: Gralloc fd[%d] import failed: errno=%d (%s)",
                    i, errno, strerror(errno));
@@ -2069,6 +2132,10 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
     * be released immediately. */
    ahb_release(ahb);
    dlclose(lib);
+   if (!bo)
+      kbase_diag("AHB fallback exhausted: no native-handle FD imported");
+   else
+      kbase_diag("AHB fallback import succeeded");
    if (!bo)
       mesa_logw("kbase: no Gralloc native-handle fd passed KBASE import");
    return bo;
@@ -2385,9 +2452,12 @@ kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
       return false;
    }
 
+   kbase_diag("%s alias probe: reserved=%p size=%zu", source, reserved, size);
    void *alias = kbase_kmod_bo_mmap(bo, PROT_READ | PROT_WRITE,
                                     MAP_SHARED, reserved);
    bool usable = alias == reserved;
+   kbase_diag("%s alias mmap: requested=%p returned=%p exact=%d errno=%d (%s)",
+              source, reserved, alias, usable, errno, strerror(errno));
    if (usable) {
       volatile uint32_t *original = kbase_bo->cpu_ptr;
       volatile uint32_t *placed = alias;
@@ -2428,6 +2498,9 @@ kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
             }
          }
       }
+      kbase_diag("%s alias validation: bidirectional=%s mprotect=%s",
+                 source, usable ? "passed" : "failed",
+                 usable ? "passed" : "failed-or-not-reached");
       if (!usable)
          mesa_logw("kbase: DMA-BUF placed alias failed bidirectional "
                    "visibility or mprotect validation");
@@ -2440,6 +2513,8 @@ kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
    }
 
    kbase_kmod_bo_free(bo);
+   kbase_diag("%s placed-memory probe FINAL=%s", source,
+              usable ? "PASSED" : "FAILED");
    mesa_logi("kbase: %s placed-memory probe %s", source,
              usable ? "passed" : "failed");
    return usable;
