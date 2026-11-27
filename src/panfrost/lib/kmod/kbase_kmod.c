@@ -2003,8 +2003,10 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
    }
 
    const uint64_t len = ALIGN_POT(size, 4096);
-   if (len > UINT32_MAX)
+   if (len > UINT32_MAX) {
+      dlclose(lib);
       return NULL;
+   }
 
    const uint64_t cpu = (kmod_flags & PAN_KMOD_BO_FLAG_WB_MMAP)
                            ? 0x33 /* CPU_READ_OFTEN | CPU_WRITE_OFTEN */
