@@ -106,7 +106,7 @@ kbase_diag(const char *fmt, ...)
          fflush(file);
          fclose(file);
       } else {
-         fprintf(stderr, "[panvk-kbase] cannot append %s: %s\\n",
+         fprintf(stderr, "[panvk-kbase] cannot append %s: %s\n",
                  path, strerror(errno));
          fflush(stderr);
       }
@@ -1933,6 +1933,12 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    }
 
    const uint64_t bo_size = req.out.va_pages * page_size;
+   kbase_diag("MEM_IMPORT succeeded: fd=%d gpu_va=0x%" PRIx64
+              " pages=%" PRIu64 " size=%" PRIu64 " flags=0x%" PRIx64
+              " layout=%u", kbase_bo->dmabuf_fd,
+              (uint64_t)req.out.gpu_va, (uint64_t)req.out.va_pages,
+              bo_size, (uint64_t)req.out.flags,
+              p_atomic_read(&mem_import_layout));
    kbase_bo->same_va =
       (req.out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP)) != 0;
    kbase_bo->placed_cpu_ptr = NULL;
@@ -2002,6 +2008,9 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
    };
 
    if (ioctl(kbase_dev->dma_heap_fd, DMA_HEAP_IOCTL_ALLOC, &alloc)) {
+      kbase_diag("DMA_HEAP_IOCTL_ALLOC failed: heap_fd=%d size=%" PRIu64
+                 " errno=%d (%s)", kbase_dev->dma_heap_fd,
+                 (uint64_t)alloc.len, errno, strerror(errno));
       mesa_loge("kbase: DMA_HEAP_IOCTL_ALLOC failed: errno=%d (%s), "
                 "heap_fd=%d size=%" PRIu64,
                 errno, strerror(errno), kbase_dev->dma_heap_fd,
@@ -2011,6 +2020,8 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
 
    struct pan_kmod_bo *bo = kbase_kmod_import_dmabuf(
       dev, NULL, alloc.fd, alloc.len, kmod_flags, false);
+   kbase_diag("DMA-HEAP import result=%s fd=%d size=%" PRIu64,
+              bo ? "PASSED" : "FAILED", alloc.fd, (uint64_t)alloc.len);
    close(alloc.fd);
    return bo;
 }
@@ -2411,6 +2422,8 @@ kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
                               struct pan_kmod_bo *bo, const char *source)
 {
    if (!bo) {
+      kbase_diag("%s probe stopped: allocation/import returned NULL; errno=%d (%s)",
+                 source, errno, strerror(errno));
       mesa_logw("kbase: %s allocation or KBASE_IOCTL_MEM_IMPORT probe failed",
                 source);
       return false;
@@ -2419,6 +2432,7 @@ kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
    int export_fd = kbase_kmod_bo_export_fd(bo);
    if (export_fd < 0) {
       int err = errno;
+      kbase_diag("%s export failed: errno=%d (%s)", source, err, strerror(err));
       mesa_logw("kbase: DMA-BUF export probe failed at fd duplication: errno=%d (%s)",
                 err, strerror(err));
       kbase_kmod_bo_free(bo);
@@ -2429,6 +2443,9 @@ kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
    off_t exported_size = lseek(export_fd, 0, SEEK_END);
    if (exported_size <= 0) {
       int err = errno;
+      kbase_diag("%s exported dma-buf size invalid: lseek=%lld errno=%d (%s)",
+                 source, (long long)exported_size, err,
+                 err ? strerror(err) : "zero-sized dma-buf");
       mesa_logw("kbase: DMA-BUF size probe failed: lseek=%lld errno=%d (%s)",
                 (long long)exported_size, err,
                 err ? strerror(err) : "no errno (zero-sized dma-buf)");
