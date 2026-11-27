@@ -17,25 +17,29 @@ fi
 
 # Build dos utilitarios nativos (host), necessarios na compilacao cruzada Android.
 # Estas opcoes seguem a configuracao documentada pelo Mesa para cross-builds Panfrost.
-rm -rf build-host
-meson setup build-host \
-  -Dplatforms=x11 \
-  -Dglx=disabled \
-  -Degl=disabled \
-  -Dgbm=disabled \
-  -Dopengl=false \
-  -Dgles1=disabled \
-  -Dgles2=disabled \
-  -Dtools=panfrost \
-  -Dgallium-drivers=panfrost \
-  -Dvulkan-drivers= \
-  -Dmesa-clc=enabled \
-  -Dinstall-mesa-clc=true \
-  -Dprecomp-compiler=enabled \
-  -Dinstall-precomp-compiler=true \
-  -Dllvm=enabled
+if [[ ! -f build-host/build.ninja ]]; then
+  meson setup build-host \
+    -Dbuildtype=release \
+    -Dplatforms= \
+    -Dglx=disabled \
+    -Degl=disabled \
+    -Dgbm=disabled \
+    -Dopengl=false \
+    -Dgles1=disabled \
+    -Dgles2=disabled \
+    -Dtools=panfrost \
+    -Dgallium-drivers=panfrost \
+    -Dvulkan-drivers= \
+    -Dmesa-clc=enabled \
+    -Dinstall-mesa-clc=true \
+    -Dprecomp-compiler=enabled \
+    -Dinstall-precomp-compiler=true \
+    -Dllvm=enabled \
+    -Dpanfrost-rust=false \
+    -Dallow-fallback-for=libdrm
+fi
 
-ninja -C build-host \
+ninja -j "${PANVK_BUILD_JOBS:-4}" -C build-host \
   src/compiler/clc/mesa_clc \
   src/compiler/spirv/vtn_bindgen2 \
   src/panfrost/clc/panfrost_compile
@@ -106,11 +110,12 @@ fi
 # Isola o pkg-config Android das bibliotecas instaladas no host.
 unset PKG_CONFIG_PATH
 
-envsubst < android.toml > /tmp/android_wrapper.toml
+mkdir -p build-config
+envsubst < android.toml > build-config/android.toml
 
 MESON_ARGS=(
-  --cross-file /tmp/android_wrapper.toml
-  -Dbuildtype=debug
+  --cross-file build-config/android.toml
+  -Dbuildtype=release
   -Dplatforms=android
   -Dandroid-stub=true
   -Dandroid-libbacktrace=disabled
@@ -140,8 +145,10 @@ MESON_ARGS=(
   -Dexpat:default_library=static
 )
 
-if [[ -d build ]]; then
+if [[ -f build/build.ninja ]]; then
   meson setup build --reconfigure "${MESON_ARGS[@]}"
 else
   meson setup build "${MESON_ARGS[@]}"
 fi
+
+ninja -j "${PANVK_BUILD_JOBS:-4}" -C build src/panfrost/vulkan/libvulkan_panfrost.so

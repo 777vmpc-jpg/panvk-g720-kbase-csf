@@ -71,6 +71,7 @@
 
 /* Forward declaration — the full definition is at the end of this file. */
 const struct pan_kmod_ops kbase_kmod_ops;
+static bool kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev);
 
 /* -------------------------------------------------------------------------
  * Internal device / BO / VM objects
@@ -164,6 +165,7 @@ struct kbase_kmod_bo {
     */
    int dmabuf_fd;
 
+   void *placed_cpu_ptr;
    /* Whether cpu_ptr was mapped by this BO and must be munmap()ed. */
    bool owns_cpu_mapping;
 
@@ -1496,14 +1498,59 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    kbase_dev_query_props(kbase_dev, props_buf, props_size);
    free(props_buf);
 
-   const char *dma_heap = getenv("PANVK_KBASE_DMA_HEAP");
-   if (!dma_heap || !dma_heap[0])
-      dma_heap = "/dev/dma_heap/system";
+   /* Android commonly exposes both cached and uncached system heaps.
+    * Try an explicit override first, then each standard heap name. A heap
+    * is usable only if allocation, Kbase import and the exact-address
+    * dma-buf alias probe all pass; do not stop at the first path that opens. */
+   const char *dma_heap_override = getenv("PANVK_KBASE_DMA_HEAP");
+   const char *dma_heaps[] = {
+      dma_heap_override,
+      "/dev/dma_heap/system",
+      "/dev/dma_heap/system-uncached",
+      "/dev/dma_heap/system_uncached",
+   };
 
-   kbase_dev->dma_heap_fd = open(dma_heap, O_RDONLY | O_CLOEXEC);
+   for (unsigned i = 0; i < ARRAY_SIZE(dma_heaps); i++) {
+      const char *path = dma_heaps[i];
+      if (!path || !path[0])
+         continue;
+
+      bool duplicate = false;
+      for (unsigned j = 0; j < i; j++) {
+         if (dma_heaps[j] && !strcmp(path, dma_heaps[j])) {
+            duplicate = true;
+            break;
+         }
+      }
+      if (duplicate)
+         continue;
+
+      int heap_fd = open(path, O_RDONLY | O_CLOEXEC);
+      if (heap_fd < 0)
+         heap_fd = open(path, O_RDWR | O_CLOEXEC);
+
+      if (heap_fd < 0) {
+         mesa_logd("kbase: cannot open DMA-HEAP %s: %s", path,
+                   strerror(errno));
+         continue;
+      }
+
+      kbase_dev->dma_heap_fd = heap_fd;
+      mesa_logi("kbase: testing DMA-HEAP %s", path);
+      if (kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
+         mesa_logi("kbase: selected DMA-HEAP %s for placed memory", path);
+         break;
+      }
+
+      mesa_logw("kbase: DMA-HEAP %s failed the full placed-memory probe; "
+                "trying the next heap", path);
+      close(kbase_dev->dma_heap_fd);
+      kbase_dev->dma_heap_fd = -1;
+   }
+
    if (kbase_dev->dma_heap_fd < 0)
-      mesa_logd("kbase: dma-heap unavailable at %s: %s", dma_heap,
-                strerror(errno));
+      mesa_logw("kbase: no DMA-HEAP passed allocation/import/placed-alias "
+                "validation; VK_EXT_map_memory_placed remains disabled");
 
    if (!kbase_dev->base.props.gpu_id) {
       mesa_loge("kbase: failed to determine GPU ID from properties");
@@ -1701,7 +1748,7 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    if (fd_path_len > 0 && (size_t)fd_path_len < sizeof(fd_path))
       fd_target_len = readlink(fd_path, fd_target, sizeof(fd_target) - 1);
    if (fd_target_len >= 0)
-      fd_target[fd_target_len] = '\\0';
+      fd_target[fd_target_len] = '\0';
 
    if (fstat(import_fd, &fd_stat) == 0) {
       mesa_logi("kbase: UMM fd identity: fd=%d mode=0%o dev=%" PRIuMAX
@@ -1749,27 +1796,28 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       goto err_close_dmabuf;
    }
 
-   if (!req.out.va_pages ||
-       req.out.va_pages > UINT64_MAX / page_size) {
-      mesa_loge("kbase: MEM_IMPORT returned invalid page count: %" PRIu64,
-                (uint64_t)req.out.va_pages);
-      struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
-      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+   const bool same_va = (req.out.flags & BASE_MEM_SAME_VA) != 0;
+   const bool need_mmap = (req.out.flags & BASE_MEM_NEED_MMAP) != 0;
+   const bool valid_pages = req.out.va_pages &&
+                            req.out.va_pages <= SIZE_MAX / page_size;
+   const size_t bo_size = valid_pages ? req.out.va_pages * page_size : 0;
+   if (!valid_pages || bo_size < size || (!same_va && !need_mmap)) {
+      mesa_loge("kbase: invalid MEM_IMPORT flags=0x%" PRIx64
+                " pages=%" PRIu64 " requested=%" PRIu64,
+                (uint64_t)req.out.flags, (uint64_t)req.out.va_pages, size);
+      if (same_va && valid_pages) {
+         void *anchor = mmap(NULL, bo_size, PROT_READ | PROT_WRITE,
+                             MAP_SHARED, dev->fd, req.out.gpu_va);
+         if (anchor != MAP_FAILED)
+            munmap(anchor, bo_size);
+      } else if (!same_va && need_mmap && req.out.gpu_va) {
+         struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+         ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+      }
       errno = EINVAL;
       goto err_close_dmabuf;
    }
-
-   const uint64_t bo_size = req.out.va_pages * page_size;
-   if (size && bo_size < size) {
-      mesa_loge("kbase: MEM_IMPORT returned undersized buffer: imported=%" PRIu64
-                " requested=%" PRIu64, bo_size, size);
-      struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
-      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
-      errno = EINVAL;
-      goto err_close_dmabuf;
-   }
-   kbase_bo->same_va =
-      (req.out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP)) != 0;
+   kbase_bo->same_va = same_va;
 
    kbase_bo->gpu_mapping =
       mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd,
@@ -1778,8 +1826,10 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       mesa_loge("kbase: mmap of imported dma-buf failed: %s",
                 strerror(errno));
       kbase_bo->gpu_mapping = NULL;
-      struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
-      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+      if (!same_va) {
+         struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+         ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+      }
       goto err_close_dmabuf;
    }
 
@@ -1796,7 +1846,8 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       kbase_bo->owns_cpu_mapping = true;
    }
 
-   kbase_bo->gpu_va = (uintptr_t)kbase_bo->gpu_mapping;
+   kbase_bo->gpu_va = same_va ? (uintptr_t)kbase_bo->gpu_mapping
+                              : req.out.gpu_va;
    uint32_t handle = p_atomic_inc_return(&kbase_dev->next_handle);
    uint32_t flags = kmod_flags;
    if (external_import)
@@ -1974,6 +2025,9 @@ kbase_kmod_bo_free(struct pan_kmod_bo *bo)
     * (free-on-close); a MEM_FREE afterwards would hit a stale VA.  For
     * zone regions (EXEC_VA), munmap() only drops the CPU mapping and the
     * region must be freed explicitly. */
+   if (kbase_bo->placed_cpu_ptr)
+      munmap(kbase_bo->placed_cpu_ptr, bo->size);
+
    if (kbase_bo->owns_cpu_mapping && kbase_bo->cpu_ptr &&
        kbase_bo->cpu_ptr != kbase_bo->gpu_mapping)
       munmap(kbase_bo->cpu_ptr, bo->size);
@@ -2039,38 +2093,167 @@ kbase_kmod_bo_get_mmap_offset(struct pan_kmod_bo *bo)
    return (off_t)kbase_bo->gpu_va;
 }
 
-/* Return the CPU mapping established at allocation time.  A SAME_VA region
- * has exactly one CPU mapping (its address is the GPU VA), so we cannot
- * honor requests for a caller-chosen address. */
+/* Native SAME_VA BOs have one fixed CPU/GPU mapping. Shareable dma-buf
+ * BOs can additionally be aliased at the address requested by
+ * VK_EXT_map_memory_placed. */
 static void *
-kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, UNUSED int prot, UNUSED int flags,
+kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags,
                    void *host_addr)
 {
    struct kbase_kmod_bo *kbase_bo =
       container_of(bo, struct kbase_kmod_bo, base);
-
-   if (host_addr != NULL && host_addr != kbase_bo->cpu_ptr) {
-      mesa_loge("kbase: mapping a BO at a caller-chosen address is not "
-                "supported (SAME_VA)");
-      errno = ENOTSUP;
-      return MAP_FAILED;
-   }
 
    if (!kbase_bo->cpu_ptr) {
       errno = EINVAL;
       return MAP_FAILED;
    }
 
+   if (host_addr && host_addr != kbase_bo->cpu_ptr) {
+      if (kbase_bo->dmabuf_fd < 0) {
+         mesa_loge("kbase: placed mapping requires a dma-buf backed BO");
+         errno = ENOTSUP;
+         return MAP_FAILED;
+      }
+
+      void *alias = mmap(host_addr, bo->size, prot,
+                         (flags & ~MAP_PRIVATE) | MAP_SHARED | MAP_FIXED,
+                         kbase_bo->dmabuf_fd, 0);
+      if (alias == MAP_FAILED) {
+         mesa_loge("kbase: dma-buf placed mmap failed: %s", strerror(errno));
+      } else {
+         kbase_bo->placed_cpu_ptr = alias;
+      }
+      return alias;
+   }
+
    return kbase_bo->cpu_ptr;
 }
 
-/* The mapping belongs to the BO and lives until bo_free: unmapping a
- * SAME_VA region would free its GPU mapping too. */
+/* A dma-buf alias is independent from the persistent GPU mapping. Native
+ * SAME_VA mappings must remain alive until BO destruction. */
 static int
-kbase_kmod_bo_munmap(UNUSED struct pan_kmod_bo *bo, UNUSED void *host_addr,
-                     UNUSED size_t size)
+kbase_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
 {
+   struct kbase_kmod_bo *kbase_bo =
+      container_of(bo, struct kbase_kmod_bo, base);
+
+   if (kbase_bo->dmabuf_fd >= 0 && host_addr != kbase_bo->cpu_ptr) {
+      int ret = munmap(host_addr, size);
+      if (!ret && kbase_bo->placed_cpu_ptr == host_addr)
+         kbase_bo->placed_cpu_ptr = NULL;
+      return ret;
+   }
+
    return 0;
+}
+
+/* Exercise the exact mechanism used by VK_EXT_map_memory_placed.  Reserve
+ * an address first so MAP_FIXED can only replace our own reservation, then
+ * verify that the placed alias sees writes made through the persistent map. */
+static bool
+kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
+{
+   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_dmabuf(dev, 65536, 0);
+   if (!bo) {
+      mesa_logw("kbase: DMA-HEAP allocation or KBASE_IOCTL_MEM_IMPORT probe failed");
+      return false;
+   }
+
+   int export_fd = kbase_kmod_bo_export_fd(bo);
+   if (export_fd < 0) {
+      int err = errno;
+      mesa_logw("kbase: DMA-BUF export probe failed at fd duplication: errno=%d (%s)",
+                err, strerror(err));
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+
+   errno = 0;
+   off_t exported_size = lseek(export_fd, 0, SEEK_END);
+   if (exported_size <= 0) {
+      int err = errno;
+      mesa_logw("kbase: DMA-BUF size probe failed: lseek=%lld errno=%d (%s)",
+                (long long)exported_size, err,
+                err ? strerror(err) : "no errno (zero-sized dma-buf)");
+      close(export_fd);
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+   mesa_logi("kbase: DMA-BUF export probe passed: fd=%d size=%lld",
+             export_fd, (long long)exported_size);
+   close(export_fd);
+
+   size_t size = pan_kmod_bo_size(bo);
+   struct kbase_kmod_bo *kbase_bo =
+      container_of(bo, struct kbase_kmod_bo, base);
+   void *reserved = mmap(NULL, size, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+   if (reserved == MAP_FAILED) {
+      mesa_logw("kbase: could not reserve VA for DMA-BUF alias probe: %s",
+                strerror(errno));
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+
+   void *alias = kbase_kmod_bo_mmap(bo, PROT_READ | PROT_WRITE,
+                                    MAP_SHARED, reserved);
+   bool usable = alias == reserved;
+   if (usable) {
+      volatile uint32_t *original = kbase_bo->cpu_ptr;
+      volatile uint32_t *placed = alias;
+      const size_t words = size / sizeof(uint32_t);
+
+      for (size_t i = 0; i < words; i++)
+         original[i] = (uint32_t)i ^ 0x6b626173;
+      for (size_t i = 0; i < words; i++) {
+         if (placed[i] != ((uint32_t)i ^ 0x6b626173)) {
+            usable = false;
+            break;
+         }
+      }
+      if (usable) {
+         for (size_t i = 0; i < words; i++)
+            placed[i] = (uint32_t)i ^ 0x706c6163;
+
+         /* Match the Peanuts Native readiness test: its OPAQUE_FD path
+          * requires aliases to support page protection changes as well as
+          * bidirectional visibility.  Keep this probe on a page inside the
+          * reserved mapping so it cannot affect unrelated process memory. */
+         const size_t page_size = sysconf(_SC_PAGESIZE);
+         if (mprotect((char *)alias + page_size, page_size, PROT_READ)) {
+            mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ) failed: %s",
+                      strerror(errno));
+            usable = false;
+         } else if (mprotect((char *)alias + page_size, page_size,
+                             PROT_READ | PROT_WRITE)) {
+            mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ|PROT_WRITE) "
+                      "restore failed: %s", strerror(errno));
+            usable = false;
+         }
+
+         for (size_t i = 0; i < words; i++) {
+            if (original[i] != ((uint32_t)i ^ 0x706c6163) ||
+                placed[i] != original[i]) {
+               usable = false;
+               break;
+            }
+         }
+      }
+      if (!usable)
+         mesa_logw("kbase: DMA-BUF placed alias failed bidirectional "
+                   "visibility or mprotect validation");
+      if (kbase_kmod_bo_munmap(bo, alias, size))
+         usable = false;
+   } else {
+      mesa_logw("kbase: DMA-BUF exact-address alias probe failed: %s",
+                strerror(errno));
+      munmap(reserved, size);
+   }
+
+   kbase_kmod_bo_free(bo);
+   mesa_logi("kbase: DMA-HEAP placed-memory probe %s",
+             usable ? "passed" : "failed");
+   return usable;
 }
 
 /* kbase does not expose per-BO fence objects.
@@ -2100,7 +2283,9 @@ kbase_kmod_flush_bo_map_syncs(struct pan_kmod_dev *dev)
 
       struct kbase_ioctl_mem_sync req = {
          .handle = kbase_bo->gpu_va,
-         .user_addr = (uintptr_t)kbase_bo->cpu_ptr + sync->start,
+         .user_addr = (uintptr_t)(kbase_bo->placed_cpu_ptr ?
+                         kbase_bo->placed_cpu_ptr : kbase_bo->cpu_ptr) +
+                      sync->start,
          .size = sync->size,
          .type = sync->type == PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH
                     ? BASE_SYNCSET_OP_MSYNC

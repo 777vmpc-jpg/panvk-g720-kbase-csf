@@ -271,7 +271,7 @@ get_valid_dma_buf_fd(VkDevice device, const native_handle_t *handle)
       if (path_len > 0 && (size_t)path_len < sizeof(fd_path))
          target_len = readlink(fd_path, fd_target, sizeof(fd_target) - 1);
       if (target_len >= 0)
-         fd_target[target_len] = '\\0';
+         fd_target[target_len] = '\0';
 
       mesa_logi("panvk: AHB native FD[%d]=%d target=%s", i, fd,
                 target_len >= 0 ? fd_target : "(unavailable)");

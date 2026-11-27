@@ -1304,6 +1304,11 @@ panvk_physical_device_init_kbase(struct panvk_physical_device *device,
 
    unsigned arch = pan_arch(device->kmod.dev->props.gpu_id);
 
+   if (arch == 12) {
+      vk_android_request_cpu_usable_swapchain_buffers();
+      vk_android_request_linear_swapchain_buffers_on_mediatek();
+   }
+
    bool unknown_gpu;
    result = get_gpu_model(device, instance, &unknown_gpu);
    if (result != VK_SUCCESS)

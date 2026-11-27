@@ -2,15 +2,9 @@ name: Build PanVK Mali G720 MC7 ARM64
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - g720-development
   push:
     branches:
-      - g720-development
-      - auto-build-mc7-v1.1.9f
-      - fix-kbase-dmabuf-size-import
-      - fix-panvk-vertex-buffer-range-guard
+      - botw-mc7-arm64
 
 permissions:
   contents: read
@@ -20,10 +14,20 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Baixar codigo-fonte
+      - name: Integrar arvore Mesa com backend Kbase e CSF
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          persist-credentials: false
+
+      - name: Verificar a base antes de compilar as correcoes integradas
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s meson.build
+          test -s src/panfrost/lib/kmod/kbase_kmod.c
+          test -s src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c
+          git diff --check HEAD
 
       - name: Instalar dependencias Linux
         run: |
@@ -38,7 +42,7 @@ jobs:
             clang llvm llvm-dev lld \
             libclang-dev \
             libclc-18 libclc-18-dev \
-            libllvmspirvlib-18-dev \
+            libllvmspirvlib-18-dev spirv-tools \
             libdrm-dev libelf-dev \
             libexpat1-dev libzstd-dev zlib1g-dev \
             libwayland-dev wayland-protocols \
@@ -55,27 +59,15 @@ jobs:
             libudev-dev patchelf \
             glslang-tools
 
-      - name: Instalar Android SDK e NDK
+      - name: Instalar Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: 'ndk;27.0.12077973'
 
-      - name: Preparar caminho do NDK
+      - name: Instalar NDK r27
         shell: bash
         run: |
-          NDK_VERSION="27.0.12077973"
-          mkdir -p "$HOME/Android/Sdk/ndk"
-
-          if [ ! -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
-            echo "NDK nao encontrado"
-            exit 1
-          fi
-
-          ln -sfn \
-            "$ANDROID_HOME/ndk/$NDK_VERSION" \
-            "$HOME/Android/Sdk/ndk/$NDK_VERSION"
-
-          echo "ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          set -euo pipefail
+          sdkmanager "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - name: Instalar Meson e ferramentas Python
         run: |
@@ -127,191 +119,17 @@ jobs:
           PKG_CONFIG_PATH="$LIBDRM_PC_DIR:${PKG_CONFIG_PATH:-}" pkg-config --modversion libdrm
           PKG_CONFIG_PATH="$LIBDRM_PC_DIR:${PKG_CONFIG_PATH:-}" pkg-config --atleast-version=2.4.133 libdrm
 
-      - name: Instalar Rust e Cargo
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Instalar bindgen para o Mesa
+      - name: Compilar e validar o pacote Android ARM64
         shell: bash
         run: |
           set -euo pipefail
+          bash setup.sh
+          python3 porting/mc7/package.py
 
-          # O Mesa atual exige bindgen 0.71.1 ou superior.
-          cargo install --locked bindgen-cli --version 0.72.1
-
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
-
-          "$HOME/.cargo/bin/bindgen" --version
-
-      - name: Verificar ferramentas
-        run: |
-          clang --version
-          llvm-config --version
-          meson --version
-          ninja --version
-          rustc --version
-          cargo --version
-          bindgen --version
-
-          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
-
-      - name: Verificar codigo-fonte
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          for file in setup.sh android.toml meson.build; do
-            if [ ! -f "$file" ]; then
-              echo "Arquivo obrigatorio ausente: $file"
-              exit 1
-            fi
-          done
-
-          if [ ! -f src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c ]; then
-            echo "Arquivo PanVK CSF nao encontrado."
-            exit 1
-          fi
-
-      - name: Auditar parametros de heap MC7 sem alterar o codigo
-        shell: bash
-        run: |
-          set -euo pipefail
-          SOURCE="src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c"
-          grep -E '^#define KBASE_TILER_HEAP_RENEW_(INTERVAL|WORK) ' "$SOURCE" | tee output-heap.txt
-          INTERVAL="$(awk '/KBASE_TILER_HEAP_RENEW_INTERVAL / {print $3}' "$SOURCE")"
-          WORK="$(awk '/KBASE_TILER_HEAP_RENEW_WORK / {print $3}' "$SOURCE")"
-          echo "HEAP_RENEW_INTERVAL=$INTERVAL" >> "$GITHUB_ENV"
-          echo "HEAP_RENEW_WORK=$WORK" >> "$GITHUB_ENV"
-
-      - name: Preparar script de compilacao
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x setup.sh
-
-      - name: Compilar PanVK ARM64
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          bash ./setup.sh
-
-          meson compile -C build
-
-      - name: Localizar e preparar biblioteca compilada
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          LIB="$(find build -type f \
-            -name libvulkan_panfrost.so \
-            -print -quit)"
-
-          if [ -z "$LIB" ]; then
-            echo "Biblioteca nao encontrada."
-            exit 1
-          fi
-
-          mkdir -p output
-          cp "$LIB" output/libvulkan_panfrost.so
-
-          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-          READelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
-          "$STRIP" --strip-unneeded output/libvulkan_panfrost.so
-
-          if "$READelf" -S output/libvulkan_panfrost.so | grep -Eq '\.debug|\.symtab'; then
-            echo "A biblioteca ainda contem secoes de debug/simbolos."
-            exit 1
-          fi
-
-          file output/libvulkan_panfrost.so
-          "$READelf" -d output/libvulkan_panfrost.so | tee output/ELF-DEPENDENCIES.txt
-          python3 - <<'PY'
-          import subprocess, os
-          readelf = os.environ["ANDROID_NDK_HOME"] + "/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
-          output = subprocess.check_output([readelf, "-d", "output/libvulkan_panfrost.so"], text=True)
-          needed = [line.split("[", 1)[1].split("]", 1)[0] for line in output.splitlines() if "(NEEDED)" in line and "[" in line and "]" in line]
-          forbidden = [name for name in needed if name == "libdrm.so" or name.startswith(("libX11", "libxcb", "libXrandr", "libXext", "libXfixes"))]
-          if forbidden:
-              raise SystemExit("Dependencias externas proibidas no ELF Android: " + ", ".join(forbidden))
-          print("Auditoria ELF aprovada. Dependencias:", ", ".join(needed))
-          PY
-          sha256sum output/libvulkan_panfrost.so
-          echo "Biblioteca compilada e preparada: $LIB"
-
-      - name: Gerar informacoes do build
-        run: |
-          {
-            echo "PanVK Mali G720 MC7"
-            echo "Arquitetura: ARM64"
-            echo "Android API: 31"
-            echo "NDK: 27.0.12077973"
-            echo "Heap renew interval: $HEAP_RENEW_INTERVAL"
-            echo "Heap renew work: $HEAP_RENEW_WORK"
-            echo ""
-            echo "SHA256:"
-            sha256sum output/libvulkan_panfrost.so
-          } > output/BUILD-INFO.txt
-
-
-      - name: Gerar manifesto e empacotar driver Android
-        shell: bash
-        env:
-          BUILD_NUMBER: ${{ github.run_number }}
-          COMMIT_SHORT: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          cp output-heap.txt output/HEAP-SETTINGS.txt
-
-          # NOTICE da mesma base Mesa 26.3.0-devel usada neste build.
-          curl --fail --location --retry 3 "https://raw.githubusercontent.com/JimVulkan/mali-panvk/8be23f2f62b70cf9a7449bfa7ace7f1dba769c9f/android/NOTICE.txt" -o output/NOTICE.txt
-          test -s output/NOTICE.txt
-          grep -q "26.3.0-devel" output/NOTICE.txt
-
-          python3 - <<'PY'
-          import json, os
-          meta = {
-              "schemaVersion": 1,
-              "name": f"PanVK G720 MC7 experimental Mesa 26.3.0-devel build {os.environ['BUILD_NUMBER']}",
-              "description": "PanVK experimental para Mali-G720 MC7, Android ARM64, baseado em Mesa 26.3.0-devel. Build de teste; compatibilidade em runtime ainda nao validada.",
-              "author": "777vmpc-jpg",
-              "packageVersion": str(os.environ["BUILD_NUMBER"]),
-              "vendor": "Mesa",
-              "driverVersion": "Experimental",
-              "minApi": 31,
-              "libraryName": "libvulkan_panfrost.so"
-          }
-          with open("output/meta.json", "w", encoding="utf-8") as f:
-              json.dump(meta, f, indent=2, ensure_ascii=False)
-              f.write("\n")
-          PY
-
-          python3 -m json.tool output/meta.json >/dev/null
-          python3 - <<'PY'
-          import json, zipfile
-          p = "output/PanVK-G720-MC7-ARM64.zip"
-          with zipfile.ZipFile(p, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-              for name in ("meta.json", "libvulkan_panfrost.so", "BUILD-INFO.txt", "HEAP-SETTINGS.txt", "NOTICE.txt"):
-                  z.write("output/" + name, arcname=name)
-          with zipfile.ZipFile(p) as z:
-              names = set(z.namelist())
-              required = {"meta.json", "libvulkan_panfrost.so", "NOTICE.txt"}
-              if not required.issubset(names):
-                  raise SystemExit("Pacote sem arquivos obrigatorios: " + repr(required - names))
-              meta = json.loads(z.read("meta.json"))
-              if meta.get("libraryName") not in names:
-                  raise SystemExit("libraryName do meta.json nao existe no ZIP")
-          PY
-
-          unzip -l output/PanVK-G720-MC7-ARM64.zip
-          sha256sum output/PanVK-G720-MC7-ARM64.zip
-
-      - name: Publicar pacote importavel (meta.json na raiz do ZIP)
+      - name: Publicar ZIP do driver
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-G720-MC7-ARM64-Package
-          path: output/PanVK-G720-MC7-ARM64.zip
+          name: PanVK-Faux123-1.1.9-G720-MC7-ARM64
+          path: output/PanVK-Faux123-1.1.9-G720-MC7-ARM64.zip
           if-no-files-found: error
           retention-days: 30

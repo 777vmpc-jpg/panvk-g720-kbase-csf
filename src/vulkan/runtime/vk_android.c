@@ -39,6 +39,8 @@
 #include "util/libsync.h"
 #include "util/log.h"
 #include "util/os_file.h"
+#include "util/os_misc.h"
+#include "util/u_atomic.h"
 #include "util/u_gralloc/u_gralloc.h"
 
 #include <hardware/gralloc.h>
@@ -52,8 +54,49 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 static struct u_gralloc *_gralloc;
+
+/* Faux123 1.1.9 behavior: request CPU-usable AHB metadata and, on MediaTek
+ * Kbase devices, prefer a linear-compatible gralloc allocation. */
+static bool vk_android_cpu_usable_swapchain_requested;
+static bool vk_android_linear_swapchain_requested;
+
+void
+vk_android_request_cpu_usable_swapchain_buffers(void)
+{
+   p_atomic_set(&vk_android_cpu_usable_swapchain_requested, true);
+}
+
+void
+vk_android_request_linear_swapchain_buffers_on_mediatek(void)
+{
+#ifdef __ANDROID__
+   char platform[PROP_VALUE_MAX] = {0};
+   if (__system_property_get("ro.board.platform", platform) >= 2 &&
+       strcmp(platform, "mt6899") == 0)
+      p_atomic_set(&vk_android_linear_swapchain_requested, true);
+#endif
+}
+
+static bool
+vk_android_swapchain_cpu_usage(VkFormat format, VkImageUsageFlags2KHR usage)
+{
+   if (!p_atomic_read(&vk_android_cpu_usable_swapchain_requested) ||
+       format != VK_FORMAT_R8G8B8A8_UNORM ||
+       !(usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+      return false;
+
+   const char *option = os_get_option("PANVK_ANB_LINEAR");
+   if (option && option[0] && strcmp(option, "0") != 0)
+      return true;
+
+   return p_atomic_read(&vk_android_linear_swapchain_requested);
+}
 
 static void
 vk_android_init_ugralloc_once(void)
@@ -337,8 +380,53 @@ vk_android_get_anb_layout(
       .pixel_stride = native_buffer->stride,
    };
 
-   return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
-                                            out_layouts, max_planes);
+   VkResult result = vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
+                                                        out_layouts, max_planes);
+   if (result != VK_SUCCESS ||
+       out->drmFormatModifier != DRM_FORMAT_MOD_INVALID)
+      return result;
+
+   const char *no_linear_fix = os_get_option("PANVK_ANB_NO_LINEAR_FIX");
+   const uint64_t cpu_usage =
+      AHARDWAREBUFFER_USAGE_CPU_READ_RARELY |
+      AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+
+   /* Restrict the fallback to the reported MTK RGBA8888 color-target case. */
+   if (!vk_android_swapchain_cpu_usage(pCreateInfo->format, pCreateInfo->usage) ||
+       no_linear_fix ||
+       native_buffer->format != HAL_PIXEL_FORMAT_RGBA_8888 ||
+       (((uint64_t)native_buffer->usage & cpu_usage) != cpu_usage) ||
+       pCreateInfo->extent.depth != 1 || pCreateInfo->arrayLayers != 1 ||
+       native_buffer->stride <= 0 ||
+       (uint32_t)native_buffer->stride < pCreateInfo->extent.width ||
+       !out_layouts || max_planes < 1)
+      return result;
+
+   const uint64_t row_pitch = (uint64_t)native_buffer->stride * 4;
+   if (pCreateInfo->extent.height &&
+       row_pitch > UINT64_MAX / pCreateInfo->extent.height)
+      return result;
+
+   const uint64_t size = row_pitch * pCreateInfo->extent.height;
+   out->drmFormatModifier = DRM_FORMAT_MOD_LINEAR;
+   out->drmFormatModifierPlaneCount = 1;
+   out->pPlaneLayouts = out_layouts;
+   out_layouts[0] = (VkSubresourceLayout) {
+      .offset = 0,
+      .size = size,
+      .rowPitch = row_pitch,
+      .arrayPitch = size,
+      .depthPitch = size,
+   };
+
+   mesa_logi("[swapchain] swapchain buffer %ux%u vkformat %u hal %d stride %d usage 0x%llx gralloc fallback linear-forced 1 -> result 0 modifier 0x0 plane0 offset 0 pitch %llu",
+             pCreateInfo->extent.width, pCreateInfo->extent.height,
+             pCreateInfo->format, native_buffer->format,
+             native_buffer->stride, (unsigned long long)native_buffer->usage,
+             (unsigned long long)row_pitch);
+
+   return VK_SUCCESS;
+
 }
 
 VkResult
@@ -658,6 +746,11 @@ vk_common_GetSwapchainGrallocUsage2ANDROID(
    if (swapchainImageUsage & VK_SWAPCHAIN_IMAGE_USAGE_SHARED_BIT_ANDROID)
       *grallocProducerUsage |= vk_android_get_front_buffer_usage();
 
+   if (vk_android_swapchain_cpu_usage(format, imageUsage)) {
+      *grallocConsumerUsage |= AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
+      *grallocProducerUsage |= AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+   }
+
    return VK_SUCCESS;
 }
 
@@ -845,6 +938,9 @@ vk_ahb_probe_format(VkFormat vk_format,
       .format = ahb_format,
       .usage = vk_image_usage_to_ahb_usage(vk_create, vk_usage),
    };
+   if (vk_android_swapchain_cpu_usage(vk_format, vk_usage))
+      desc.usage |= AHARDWAREBUFFER_USAGE_CPU_READ_RARELY |
+                    AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
 #if ANDROID_API_LEVEL >= 29
    return AHardwareBuffer_isSupported(&desc);
 #else
@@ -1238,6 +1334,10 @@ vk_android_get_ahb_image_properties(
 
       ahb_usage->androidHardwareBufferUsage =
          vk_image_usage_to_ahb_usage(image_flags, image_usage);
+      if (vk_android_swapchain_cpu_usage(info->format, image_usage))
+         ahb_usage->androidHardwareBufferUsage |=
+            AHARDWAREBUFFER_USAGE_CPU_READ_RARELY |
+            AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
    }
 
    return VK_SUCCESS;

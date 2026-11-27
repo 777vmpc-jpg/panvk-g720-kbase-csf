@@ -28,10 +28,24 @@
 #include "pan_format.h"
 #include "pan_props.h"
 
+#ifdef HAVE_PAN_KMOD_KBASE
+#include "kmod/kbase_kmod.h"
+#endif
+
 /* We reserve one ubo for push constant, one for sysvals and one per-set for the
  * descriptor metadata  */
 #define RESERVED_UBO_COUNT                   6
 #define MAX_INLINE_UNIFORM_BLOCK_DESCRIPTORS (32 - RESERVED_UBO_COUNT)
+
+static bool
+supports_placed_memory(const struct panvk_physical_device *device)
+{
+#ifdef HAVE_PAN_KMOD_KBASE
+   if (device->kbase_node_path[0])
+      return kbase_kmod_supports_dmabuf(device->kmod.dev);
+#endif
+   return true;
+}
 
 void
 panvk_per_arch(get_physical_device_extensions)(
@@ -179,7 +193,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_legacy_dithering = true,
       .EXT_line_rasterization = true,
       .EXT_load_store_op_none = true,
-      .EXT_map_memory_placed = true,
+      .EXT_map_memory_placed = supports_placed_memory(device),
       .EXT_nested_command_buffer = PAN_ARCH >= 10,
       .EXT_memory_budget = true,
       .EXT_non_seamless_cube_map = true,
@@ -713,9 +727,9 @@ panvk_per_arch(get_physical_device_features)(
       .nestedCommandBufferSimultaneousUse = PAN_ARCH >= 10,
 
       /* VK_EXT_map_memory_placed */
-      .memoryMapPlaced = true,
+      .memoryMapPlaced = supports_placed_memory(device),
       .memoryMapRangePlaced = false,
-      .memoryUnmapReserve = true,
+      .memoryUnmapReserve = !device->kbase_node_path[0],
 
       /* VK_EXT_non_seamless_cube_map */
       .nonSeamlessCubeMap = true,

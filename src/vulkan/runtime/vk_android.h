@@ -41,6 +41,8 @@ struct vk_image;
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
 
 struct u_gralloc *vk_android_get_ugralloc(void);
+void vk_android_request_cpu_usable_swapchain_buffers(void);
+void vk_android_request_linear_swapchain_buffers_on_mediatek(void);
 
 VkResult vk_android_import_anb(struct vk_device *device,
                                const VkImageCreateInfo *pCreateInfo,
@@ -68,6 +70,16 @@ static inline struct u_gralloc *
 vk_android_get_ugralloc(void)
 {
    return NULL;
+}
+
+static inline void
+vk_android_request_cpu_usable_swapchain_buffers(void)
+{
+}
+
+static inline void
+vk_android_request_linear_swapchain_buffers_on_mediatek(void)
+{
 }
 
 static inline VkResult
