@@ -9,6 +9,7 @@ on:
       - integrate-faux123-192-mc7
       - kakarot-placed-memory
       - kakarot-display-diagnostics
+      - kakarot-ahb-libandroid-fdprobe
 
 permissions:
   contents: read
