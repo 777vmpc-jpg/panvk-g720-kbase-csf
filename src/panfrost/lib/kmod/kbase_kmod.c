@@ -82,8 +82,9 @@ static bool kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev);
 static bool kbase_kmod_probe_ahb(struct pan_kmod_dev *dev);
 
 /* Peanuts Native does not consistently package Mesa's normal log stream.
- * Mirror the memory-probe diagnostics to the path explicitly supplied by
- * the launcher, flushing each line so a crash cannot discard the evidence. */
+ * Try the launcher-selected files first, then app-private locations which
+ * remain writable under Android scoped-storage rules. Flush every record so
+ * a crash cannot discard the memory-probe evidence. */
 static void
 kbase_diag(const char *fmt, ...)
 {
@@ -95,25 +96,58 @@ kbase_diag(const char *fmt, ...)
 
    mesa_logi("kbase-diag: %s", message);
 
-   const char *path = getenv("PANVK_KBASE_DIAG_FILE");
-   if (!path || !path[0])
-      path = getenv("MESA_LOG_FILE");
+   const char *candidates[4] = {
+      getenv("PANVK_KBASE_DIAG_FILE"),
+      getenv("MESA_LOG_FILE"),
+      NULL,
+      NULL,
+   };
+   char dm_temp_path[1024];
+   char home_path[1024];
+   const char *dm_temp = getenv("DM_TEMP");
+   const char *home = getenv("HOME");
 
-   if (path && path[0]) {
+   if (dm_temp && dm_temp[0]) {
+      snprintf(dm_temp_path, sizeof(dm_temp_path),
+               "%s/panvk-kbase.log", dm_temp);
+      candidates[2] = dm_temp_path;
+   }
+   if (home && home[0]) {
+      snprintf(home_path, sizeof(home_path),
+               "%s/panvk-kbase.log", home);
+      candidates[3] = home_path;
+   }
+
+   for (unsigned i = 0; i < ARRAY_SIZE(candidates); i++) {
+      const char *path = candidates[i];
+      if (!path || !path[0])
+         continue;
+
+      bool duplicate = false;
+      for (unsigned j = 0; j < i; j++) {
+         if (candidates[j] && strcmp(path, candidates[j]) == 0) {
+            duplicate = true;
+            break;
+         }
+      }
+      if (duplicate)
+         continue;
+
       FILE *file = fopen(path, "a");
-      if (file) {
-         fprintf(file, "[panvk-kbase] %s\n", message);
-         fflush(file);
-         fclose(file);
-      } else {
+      if (!file) {
          fprintf(stderr, "[panvk-kbase] cannot append %s: %s\n",
                  path, strerror(errno));
-         fflush(stderr);
+         continue;
       }
-   } else {
-      fprintf(stderr, "[panvk-kbase] %s\n", message);
-      fflush(stderr);
+
+      fprintf(file, "[panvk-kbase] %s\n", message);
+      fflush(file);
+      fclose(file);
+      return;
    }
+
+   fprintf(stderr, "[panvk-kbase] %s\n", message);
+   fflush(stderr);
 }
 
 /* -------------------------------------------------------------------------
