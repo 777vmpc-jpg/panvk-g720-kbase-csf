@@ -41,7 +41,9 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <poll.h>
+#include <stdio.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "util/macros.h"
@@ -1669,10 +1671,14 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       goto err_free_bo;
    }
 
+   /* Match the UMM import flags used by working kbase userspace:
+    * CPU/GPU read-write plus SAME_VA.  IMPORT_SHARED and
+    * COHERENT_SYSTEM are not valid substitutes for these access flags and
+    * can make vendor kbase reject Android gralloc buffers with -ENOMEM. */
    uint64_t import_flags =
       BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
       BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR |
-      BASE_MEM_IMPORT_SHARED | BASE_MEM_COHERENT_SYSTEM;
+      BASE_MEM_SAME_VA;
 
    if (kmod_flags & PAN_KMOD_BO_FLAG_GPU_UNCACHED)
       import_flags |= BASE_MEM_UNCACHED_GPU;
@@ -1680,7 +1686,35 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       import_flags |= BASE_MEM_CACHED_CPU;
 
    int import_fd = kbase_bo->dmabuf_fd;
-   union kbase_ioctl_mem_import req = {
+
+   /*
+    * Kbase reports -ENOMEM for several distinct UMM failures, including
+    * dma_buf_get(), dma_buf_attach(), VA-region allocation and GPU mapping.
+    * Capture the exported fd identity before the ioctl so Android gralloc
+    * handles can be distinguished from valid dma-buf descriptors.
+    */
+   struct stat fd_stat;
+   char fd_path[64], fd_target[160] = {0};
+   int fd_path_len = snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d",
+                              import_fd);
+   ssize_t fd_target_len = -1;
+   if (fd_path_len > 0 && (size_t)fd_path_len < sizeof(fd_path))
+      fd_target_len = readlink(fd_path, fd_target, sizeof(fd_target) - 1);
+   if (fd_target_len >= 0)
+      fd_target[fd_target_len] = '\\0';
+
+   if (fstat(import_fd, &fd_stat) == 0) {
+      mesa_logi("kbase: UMM fd identity: fd=%d mode=0%o dev=%" PRIuMAX
+                " ino=%" PRIuMAX " size=%" PRIdMAX " link=%s",
+                import_fd, (unsigned int)fd_stat.st_mode,
+                (uintmax_t)fd_stat.st_dev, (uintmax_t)fd_stat.st_ino,
+                (intmax_t)fd_stat.st_size,
+                fd_target_len >= 0 ? fd_target : "(unavailable)");
+   } else {
+      mesa_loge("kbase: UMM fd fstat failed: fd=%d errno=%d (%s)",
+                import_fd, errno, strerror(errno));
+   }
+   union kbase_ioctl_mem_import_40 req = {
       .in = {
          .flags = import_flags,
          .phandle = (uintptr_t)&import_fd,
@@ -1688,12 +1722,52 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       },
    };
 
-   if (ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req)) {
-      mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: %s", strerror(errno));
+   /*
+    * Most Kbase kernels use the legacy 24-byte ioctl.  Some vendor kernels
+    * expose the extended 40-byte command with the same field offsets.
+    * Retry the extended ABI only when the legacy command is not recognised;
+    * do not mask ENOMEM/EINVAL returned by a kernel that did recognise it.
+    */
+   int import_ret = ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req);
+   int import_errno = import_ret ? errno : 0;
+   bool import_40 = false;
+   if (import_ret && import_errno == ENOTTY) {
+      import_ret = ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT_40, &req);
+      import_errno = import_ret ? errno : 0;
+      import_40 = import_ret == 0;
+   }
+
+   if (import_ret) {
+      mesa_loge("kbase: MEM_IMPORT failed: fd=%d dup_fd=%d abi=%s "
+                "cmd=0x%lx flags=0x%" PRIx64 " type=%u errno=%d (%s)",
+                fd, kbase_bo->dmabuf_fd, import_40 ? "40-byte" : "24-byte",
+                (unsigned long)(import_40 ? KBASE_IOCTL_MEM_IMPORT_40
+                                          : KBASE_IOCTL_MEM_IMPORT),
+                import_flags, BASE_MEM_IMPORT_TYPE_UMM,
+                import_errno, strerror(import_errno));
+      errno = import_errno;
+      goto err_close_dmabuf;
+   }
+
+   if (!req.out.va_pages ||
+       req.out.va_pages > UINT64_MAX / page_size) {
+      mesa_loge("kbase: MEM_IMPORT returned invalid page count: %" PRIu64,
+                (uint64_t)req.out.va_pages);
+      struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+      errno = EINVAL;
       goto err_close_dmabuf;
    }
 
    const uint64_t bo_size = req.out.va_pages * page_size;
+   if (size && bo_size < size) {
+      mesa_loge("kbase: MEM_IMPORT returned undersized buffer: imported=%" PRIu64
+                " requested=%" PRIu64, bo_size, size);
+      struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+      errno = EINVAL;
+      goto err_close_dmabuf;
+   }
    kbase_bo->same_va =
       (req.out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP)) != 0;
 

@@ -331,6 +331,25 @@ union kbase_ioctl_mem_import {
 #define KBASE_IOCTL_MEM_IMPORT \
    _IOWR(KBASE_IOCTL_TYPE, 22, union kbase_ioctl_mem_import)
 
+/* Some vendor Kbase kernels expose the extended 40-byte import ABI.  Keep
+ * the input/output fields at the same offsets as the legacy 24-byte ABI. */
+union kbase_ioctl_mem_import_40 {
+   struct {
+      __u64 flags;
+      __u64 phandle;
+      __u32 type;
+      __u32 padding;
+   } in;
+   struct {
+      __u64 flags;
+      __u64 gpu_va;
+      __u64 va_pages;
+   } out;
+   __u8 pad[40];
+};
+#define KBASE_IOCTL_MEM_IMPORT_40 \
+   _IOWR(KBASE_IOCTL_TYPE, 22, union kbase_ioctl_mem_import_40)
+
 /* base_mem_import_type */
 #define BASE_MEM_IMPORT_TYPE_INVALID     0
 #define BASE_MEM_IMPORT_TYPE_UMM         2 /* dma-buf */
