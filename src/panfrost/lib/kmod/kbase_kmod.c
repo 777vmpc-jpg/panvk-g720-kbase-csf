@@ -1799,11 +1799,75 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       },
    };
 
-   if (ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req)) {
+   /* Some MediaTek CSF kernels build kbase with the SLC dynamic-policy
+    * UAPI extension. That changes the encoded _IOWR size of MEM_IMPORT
+    * from Arm's 24-byte union to a 40-byte union carrying PBHA hints.
+    * The ioctl number stays 22; an Arm-layout request is rejected with
+    * ENOTTY. Try the Arm ABI first, then retry the known MTK layout only
+    * for ENOTTY. Zero PBHA fields request the kernel's no-hint path.
+    * Keep the successful layout for later allocations in this process:
+    * 0 = unknown, 1 = Arm, 2 = MTK SLC.
+    */
+   static uint32_t mem_import_layout;
+   int import_ret = -1;
+
+   if (p_atomic_read(&mem_import_layout) != 2) {
+      import_ret = ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req);
+      if (!import_ret && p_atomic_cmpxchg(&mem_import_layout, 0, 1) == 0)
+         mesa_logi("kbase: MEM_IMPORT accepted Arm UAPI layout (24 bytes)");
+   }
+
+   if (import_ret && (p_atomic_read(&mem_import_layout) == 2 ||
+                      errno == ENOTTY)) {
+      union {
+         struct {
+            uint64_t flags;
+            uint64_t phandle;
+            uint32_t type;
+            uint32_t padding;
+            uint32_t vk_allocate_memory_call_id;
+            uint8_t num_planes;
+            uint8_t pbha_8bit;
+            uint8_t alignment[6];
+         } in;
+         struct {
+            uint64_t flags;
+            uint64_t gpu_va;
+            uint64_t va_pages;
+            uint8_t pbha_8bit;
+            uint8_t alignment[7];
+         } out;
+      } mtk_req = {
+         .in = {
+            .flags = req.in.flags,
+            .phandle = req.in.phandle,
+            .type = req.in.type,
+            .padding = req.in.padding,
+         },
+      };
+      static_assert(sizeof(mtk_req) == 40, "MTK SLC MEM_IMPORT layout");
+
+      if (p_atomic_read(&mem_import_layout) != 2)
+         mesa_logw("kbase: Arm MEM_IMPORT layout rejected with ENOTTY; "
+                   "retrying MTK SLC layout (40 bytes)");
+      import_ret = ioctl(dev->fd,
+                         _IOWR(KBASE_IOCTL_TYPE, 22, __typeof__(mtk_req)),
+                         &mtk_req);
+      if (!import_ret) {
+         req.out.flags = mtk_req.out.flags;
+         req.out.gpu_va = mtk_req.out.gpu_va;
+         req.out.va_pages = mtk_req.out.va_pages;
+         if (p_atomic_cmpxchg(&mem_import_layout, 0, 2) == 0)
+            mesa_logi("kbase: MEM_IMPORT accepted MTK SLC UAPI layout (40 bytes)");
+      }
+   }
+
+   if (import_ret) {
       mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: errno=%d (%s), "
-                "fd=%d size=%" PRIu64 " flags=0x%" PRIx64,
+                "fd=%d size=%" PRIu64 " flags=0x%" PRIx64
+                " layout=%u",
                 errno, strerror(errno), kbase_bo->dmabuf_fd, size,
-                import_flags);
+                import_flags, p_atomic_read(&mem_import_layout));
       goto err_close_dmabuf;
    }
 
