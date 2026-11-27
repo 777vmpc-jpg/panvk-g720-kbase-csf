@@ -102,7 +102,7 @@ kbase_diag(const char *fmt, ...)
    if (path && path[0]) {
       FILE *file = fopen(path, "a");
       if (file) {
-         fprintf(file, "[panvk-kbase] %s\\n", message);
+         fprintf(file, "[panvk-kbase] %s\n", message);
          fflush(file);
          fclose(file);
       } else {
@@ -111,7 +111,7 @@ kbase_diag(const char *fmt, ...)
          fflush(stderr);
       }
    } else {
-      fprintf(stderr, "[panvk-kbase] %s\\n", message);
+      fprintf(stderr, "[panvk-kbase] %s\n", message);
       fflush(stderr);
    }
 }
