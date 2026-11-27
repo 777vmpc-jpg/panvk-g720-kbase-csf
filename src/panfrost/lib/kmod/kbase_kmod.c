@@ -1996,7 +1996,9 @@ kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
       lib ? dlsym(lib, "AHardwareBuffer_getNativeHandle") : NULL;
 
    if (!ahb_alloc || !ahb_release || !ahb_handle) {
-      mesa_logw("kbase: Gralloc AHardwareBuffer API unavailable");
+      mesa_logw("kbase: Gralloc AHardwareBuffer API unavailable in libandroid.so");
+      if (lib)
+         dlclose(lib);
       return NULL;
    }
 
