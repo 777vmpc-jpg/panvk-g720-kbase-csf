@@ -38,12 +38,16 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/dma-heap.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <dlfcn.h>
+#endif
 
 #include "util/macros.h"
 #include "util/os_time.h"
@@ -74,6 +78,7 @@ const struct pan_kmod_ops kbase_kmod_ops;
 /* Probe the complete DMA-HEAP -> kbase import -> exact-address alias path
  * before advertising VK_EXT_map_memory_placed. */
 static bool kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev);
+static bool kbase_kmod_probe_ahb(struct pan_kmod_dev *dev);
 
 /* -------------------------------------------------------------------------
  * Internal device / BO / VM objects
@@ -110,6 +115,8 @@ struct kbase_kmod_dev {
 
    /* Android dma-heap used for BOs which need to be shared with WSI. */
    int dma_heap_fd;
+   /* Gralloc BLOB fallback, validated for exact-address dma-buf aliasing. */
+   bool ahb_shareable;
 
    /* Set when the CSF notification stream reports a queue-group error.
     * Vulkan queue status queries use this latch instead of invalidating and
@@ -183,7 +190,7 @@ kbase_kmod_supports_dmabuf(const struct pan_kmod_dev *dev)
    const struct kbase_kmod_dev *kbase_dev =
       container_of(dev, const struct kbase_kmod_dev, base);
 
-   return kbase_dev->dma_heap_fd >= 0;
+   return kbase_dev->dma_heap_fd >= 0 || kbase_dev->ahb_shareable;
 }
 
 /* -------------------------------------------------------------------------
@@ -1610,9 +1617,14 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
       }
    }
 
-   if (kbase_dev->dma_heap_fd < 0)
-      mesa_logw("kbase: no DMA-HEAP passed allocation/import/placed-alias "
-                "validation; VK_EXT_map_memory_placed remains disabled");
+   if (kbase_dev->dma_heap_fd < 0) {
+      kbase_dev->ahb_shareable = kbase_kmod_probe_ahb(&kbase_dev->base);
+      if (kbase_dev->ahb_shareable)
+         mesa_logi("kbase: Gralloc AHardwareBuffer selected for placed memory");
+      else
+         mesa_logw("kbase: neither DMA-HEAP nor Gralloc passed placed-memory "
+                   "validation; VK_EXT_map_memory_placed remains disabled");
+   }
 
    if (!kbase_dev->base.props.gpu_id) {
       mesa_loge("kbase: failed to determine GPU ID from properties");
@@ -1954,6 +1966,85 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
    return bo;
 }
 
+/* When Android has no usable DMA-HEAP, gralloc can provide a
+ * shareable BLOB AHardwareBuffer. Import the actual dma-buf fd from the
+ * native handle; on some MediaTek grallocs fd 0 is metadata, not the buffer.
+ * This is the tested fallback from panvk-kbase-android patch 0133. */
+static struct pan_kmod_bo *
+kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
+                        uint32_t kmod_flags)
+{
+#ifdef __ANDROID__
+   struct ahb_desc {
+      uint32_t width, height, layers, format;
+      uint64_t usage;
+      uint32_t stride, rfu0;
+      uint64_t rfu1;
+   };
+   struct native_handle {
+      int version, num_fds, num_ints, data[];
+   };
+   void *lib = dlopen("libnativewindow.so", RTLD_NOW | RTLD_LOCAL);
+   int (*ahb_alloc)(const struct ahb_desc *, void **) =
+      lib ? dlsym(lib, "AHardwareBuffer_allocate") : NULL;
+   void (*ahb_release)(void *) =
+      lib ? dlsym(lib, "AHardwareBuffer_release") : NULL;
+   const struct native_handle *(*ahb_handle)(const void *) =
+      lib ? dlsym(lib, "AHardwareBuffer_getNativeHandle") : NULL;
+
+   if (!ahb_alloc || !ahb_release || !ahb_handle) {
+      mesa_logw("kbase: Gralloc AHardwareBuffer API unavailable");
+      return NULL;
+   }
+
+   const uint64_t len = ALIGN_POT(size, 4096);
+   const uint64_t cpu = (kmod_flags & PAN_KMOD_BO_FLAG_WB_MMAP)
+                           ? 0x33 /* CPU_READ_OFTEN | CPU_WRITE_OFTEN */
+                           : 0x22 /* CPU_READ_RARELY | CPU_WRITE_RARELY */;
+   struct ahb_desc desc = {
+      .width = len, .height = 1, .layers = 1,
+      .format = 0x21 /* AHARDWAREBUFFER_FORMAT_BLOB */,
+      .usage = cpu | (1ull << 24) /* GPU_DATA_BUFFER */,
+   };
+   void *ahb = NULL;
+
+   if (len > UINT32_MAX)
+      return NULL;
+   if (ahb_alloc(&desc, &ahb)) {
+      desc.usage = cpu;
+      if (ahb_alloc(&desc, &ahb)) {
+         mesa_logw("kbase: Gralloc BLOB allocation of %" PRIu64
+                   " bytes failed", len);
+         return NULL;
+      }
+   }
+
+   const struct native_handle *h = ahb_handle(ahb);
+   struct pan_kmod_bo *bo = NULL;
+   for (int i = 0; h && i < h->num_fds && !bo; i++) {
+      char path[32], link[64] = "";
+      snprintf(path, sizeof(path), "/proc/self/fd/%d", h->data[i]);
+      if (readlink(path, link, sizeof(link) - 1) > 0 &&
+          (!strncmp(link, "/dmabuf:", 8) ||
+           !strcmp(link, "anon_inode:dmabuf"))) {
+         mesa_logd("kbase: trying Gralloc dma-buf fd %d (%s)", h->data[i],
+                   link);
+         bo = kbase_kmod_import_dmabuf(dev, NULL, h->data[i], len,
+                                       kmod_flags, false);
+      }
+   }
+
+   /* The import owns a duplicated dma-buf fd, so the AHardwareBuffer can
+    * be released immediately. */
+   ahb_release(ahb);
+   if (!bo)
+      mesa_logw("kbase: Gralloc BLOB had no importable dma-buf fd");
+   return bo;
+#else
+   return NULL;
+#endif
+}
+
 static struct pan_kmod_bo *
 kbase_kmod_bo_alloc(struct pan_kmod_dev *dev,
                     struct pan_kmod_vm *exclusive_vm, uint64_t size,
@@ -1966,14 +2057,15 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev,
        !(kmod_flags & (PAN_KMOD_BO_FLAG_EXECUTABLE |
                        PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT |
                        PAN_KMOD_BO_FLAG_CSF_EVENT))) {
-      if (kbase_dev->dma_heap_fd < 0) {
-         mesa_loge("kbase: shareable BO requested but no working DMA-HEAP "
-                   "is available");
-         errno = ENOTSUP;
-         return NULL;
-      }
+      if (kbase_dev->dma_heap_fd >= 0)
+         return kbase_kmod_bo_alloc_dmabuf(dev, size, kmod_flags);
+      if (kbase_dev->ahb_shareable)
+         return kbase_kmod_bo_alloc_ahb(dev, size, kmod_flags);
 
-      return kbase_kmod_bo_alloc_dmabuf(dev, size, kmod_flags);
+      mesa_loge("kbase: shareable BO requested but neither DMA-HEAP nor "
+                "validated Gralloc BLOB is available");
+      errno = ENOTSUP;
+      return NULL;
    }
 
    const uint64_t page_size = 4096;
@@ -2216,11 +2308,12 @@ kbase_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
  * an address first so MAP_FIXED can only replace our own reservation, then
  * verify that the placed alias sees writes made through the persistent map. */
 static bool
-kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
+kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
+                              struct pan_kmod_bo *bo, const char *source)
 {
-   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_dmabuf(dev, 65536, 0);
    if (!bo) {
-      mesa_logw("kbase: DMA-HEAP allocation or KBASE_IOCTL_MEM_IMPORT probe failed");
+      mesa_logw("kbase: %s allocation or KBASE_IOCTL_MEM_IMPORT probe failed",
+                source);
       return false;
    }
 
@@ -2315,9 +2408,23 @@ kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
    }
 
    kbase_kmod_bo_free(bo);
-   mesa_logi("kbase: DMA-HEAP placed-memory probe %s",
+   mesa_logi("kbase: %s placed-memory probe %s", source,
              usable ? "passed" : "failed");
    return usable;
+}
+
+static bool
+kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
+{
+   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_dmabuf(dev, 65536, 0);
+   return kbase_kmod_probe_shareable_bo(dev, bo, "DMA-HEAP");
+}
+
+static bool
+kbase_kmod_probe_ahb(struct pan_kmod_dev *dev)
+{
+   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_ahb(dev, 65536, 0);
+   return kbase_kmod_probe_shareable_bo(dev, bo, "Gralloc AHardwareBuffer");
 }
 
 /* kbase does not expose per-BO fence objects.
