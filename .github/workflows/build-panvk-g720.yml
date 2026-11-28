@@ -9,7 +9,7 @@ on:
     branches:
       - g720-development
       - auto-build-mc7-v1.1.9f
-      - panvk/mc7-icd-test-b
+      - panvk/mc7-repair-a
 
 permissions:
   contents: read
@@ -252,8 +252,8 @@ jobs:
           cat > output/meta.json <<'JSON'
           {
             "schemaVersion": 1,
-            "name": "PanVK G720 MC7 BOTW + Peanuts Test B",
-            "packageVersion": "1.1.9-test-b",
+            "name": "PanVK G720 MC7 BOTW + Peanuts Repair A",
+            "packageVersion": "1.1.9-repair-a",
             "driverVersion": "26.3.0-devel",
             "vendor": "Mesa / PanVK",
             "minApi": 30,
