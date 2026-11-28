@@ -211,12 +211,18 @@ vk_android_import_anb_memory(struct vk_device *device,
    VkResult result = device->dispatch_table.GetMemoryFdPropertiesKHR(
       (VkDevice)device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
       dma_buf_fd, &fd_props);
-   if (result != VK_SUCCESS)
+   if (result != VK_SUCCESS) {
+      mesa_logw("Gralloc image fd %d: memory properties query failed (%d)",
+                dma_buf_fd, result);
       return result;
+   }
 
    uint32_t compatible_types = mem_reqs.memoryTypeBits & fd_props.memoryTypeBits;
-   if (!compatible_types)
+   if (!compatible_types) {
+      mesa_logw("Gralloc image fd %d: no compatible memory type (image %#x, fd %#x)",
+                dma_buf_fd, mem_reqs.memoryTypeBits, fd_props.memoryTypeBits);
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
 
    int dup_fd = os_dupfd_cloexec(dma_buf_fd);
    if (dup_fd < 0) {
@@ -245,6 +251,8 @@ vk_android_import_anb_memory(struct vk_device *device,
    result = device->dispatch_table.AllocateMemory(
       (VkDevice)device, &alloc_info, alloc, &image->anb_memory);
    if (result != VK_SUCCESS) {
+      mesa_logw("Gralloc image fd %d: memory import failed (%d)",
+                dma_buf_fd, result);
       close(dup_fd);
       return result;
    }

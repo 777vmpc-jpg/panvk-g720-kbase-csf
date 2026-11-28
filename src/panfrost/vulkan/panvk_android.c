@@ -110,7 +110,7 @@ panvk_android_get_buffer_mem_reqs(VkDevice dev_handle, VkBuffer buf_handle,
 }
 
 static VkResult
-panvk_android_anb_init(struct panvk_device *dev, VkImageCreateInfo *create_info,
+panvk_android_anb_init(const VkImageCreateInfo *create_info,
                        struct panvk_image *img)
 {
    VkResult result;
@@ -130,9 +130,9 @@ panvk_android_anb_init(struct panvk_device *dev, VkImageCreateInfo *create_info,
       .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
    };
 
-   /* create_info is a already local copy from the caller */
-   create_info->pNext = &external_info;
-   return panvk_image_init(img, create_info);
+   VkImageCreateInfo image_info = *create_info;
+   image_info.pNext = &external_info;
+   return panvk_image_init(img, &image_info);
 }
 
 VkResult
@@ -165,7 +165,7 @@ panvk_android_create_gralloc_image(VkDevice device,
    create_info.tiling = img->vk.tiling =
       VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
 
-   result = panvk_android_anb_init(dev, &create_info, img);
+   result = panvk_android_anb_init(&create_info, img);
    if (result != VK_SUCCESS) {
       vk_image_destroy(&dev->vk, pAllocator, &img->vk);
       return panvk_error(device, result);
@@ -203,8 +203,9 @@ panvk_android_get_wsi_memory(struct panvk_device *dev,
     */
    VkNativeBufferANDROID local_anb = *anb;
    local_anb.pNext = create_info->pNext;
-   create_info->pNext = &local_anb;
-   result = panvk_android_anb_init(dev, create_info, img);
+   VkImageCreateInfo native_info = *create_info;
+   native_info.pNext = &local_anb;
+   result = panvk_android_anb_init(&native_info, img);
    if (result != VK_SUCCESS)
       return result;
 
