@@ -1695,12 +1695,12 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
       }
    }
 
-   if (kbase_dev->dma_heap_fd < 0) {
-      kbase_diag("all DMA-HEAP candidates failed; entering AHardwareBuffer fallback");
+   {
+      kbase_diag("validating AHardwareBuffer as a shareable allocation fallback");
       kbase_dev->ahb_shareable = kbase_kmod_probe_ahb(&kbase_dev->base);
       if (kbase_dev->ahb_shareable)
-         mesa_logi("kbase: Gralloc AHardwareBuffer selected for placed memory");
-      else
+         mesa_logi("kbase: Gralloc AHardwareBuffer validated for placed memory");
+      else if (kbase_dev->dma_heap_fd < 0)
          mesa_logw("kbase: neither DMA-HEAP nor Gralloc passed placed-memory "
                    "validation; VK_EXT_map_memory_placed remains disabled");
    }
@@ -2224,8 +2224,13 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev,
        !(kmod_flags & (PAN_KMOD_BO_FLAG_EXECUTABLE |
                        PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT |
                        PAN_KMOD_BO_FLAG_CSF_EVENT))) {
-      if (kbase_dev->dma_heap_fd >= 0)
-         return kbase_kmod_bo_alloc_dmabuf(dev, size, kmod_flags);
+      if (kbase_dev->dma_heap_fd >= 0) {
+         struct pan_kmod_bo *bo =
+            kbase_kmod_bo_alloc_dmabuf(dev, size, kmod_flags);
+         if (bo || !kbase_dev->ahb_shareable)
+            return bo;
+         mesa_logw("kbase: DMA-HEAP allocation failed; trying validated AHB");
+      }
       if (kbase_dev->ahb_shareable)
          return kbase_kmod_bo_alloc_ahb(dev, size, kmod_flags);
 
