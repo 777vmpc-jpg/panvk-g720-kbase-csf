@@ -1874,7 +1874,7 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    uint64_t import_flags =
       BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
       BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR |
-      BASE_MEM_IMPORT_SHARED | BASE_MEM_COHERENT_SYSTEM;
+      BASE_MEM_SAME_VA;
 
    if (kmod_flags & PAN_KMOD_BO_FLAG_GPU_UNCACHED)
       import_flags |= BASE_MEM_UNCACHED_GPU;
@@ -1966,6 +1966,14 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       goto err_close_dmabuf;
    }
 
+   if (!req.out.va_pages || req.out.va_pages > UINT64_MAX / page_size ||
+       (size && req.out.va_pages * page_size < size)) {
+      struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+      kbase_diag("MEM_IMPORT returned invalid or undersized page count");
+      errno = EINVAL;
+      goto err_close_dmabuf;
+   }
    const uint64_t bo_size = req.out.va_pages * page_size;
    kbase_diag("MEM_IMPORT succeeded: fd=%d gpu_va=0x%" PRIx64
               " pages=%" PRIu64 " size=%" PRIu64 " flags=0x%" PRIx64
