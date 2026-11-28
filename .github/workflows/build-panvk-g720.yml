@@ -6,8 +6,7 @@ on:
     branches:
       - panvk/mc7-timestamp-compat
     paths:
-      - src/**
-      - vendor/**
+      - src/panfrost/vulkan/panvk_cmd_draw.h
 
 permissions:
   contents: read
@@ -237,12 +236,6 @@ jobs:
               env.write(f"HEAP_RENEW_WORK_STATUS={work_status}\n")
           PY
 
-      - name: Instrumentar apresentacao Android e submissao Kbase
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/instrument-display-path.py
-
       - name: Preparar script de compilacao
         shell: bash
         run: |
@@ -327,14 +320,14 @@ jobs:
           readelf -d output/libvulkan_panfrost.so | tee output/ELF-DYNAMIC.txt
           readelf --dyn-syms --wide output/libvulkan_panfrost.so > output/ELF-SYMBOLS.txt
           grep -Eq 'GLOBAL.*DEFAULT.*[0-9]+ +vk_icdGetInstanceProcAddr$' output/ELF-SYMBOLS.txt
-          python3 -c 'import json; from pathlib import Path; p=Path("output"); m=json.loads((p/"meta.json").read_text()); assert m["libraryName"]=="libvulkan_panfrost.so"; assert (p/m["libraryName"]).is_file(); m["minApi"]=30; m["name"]="PanVK Faux123 1.1.9 G720 MC7 8GB AndroidSync"; m["packageVersion"]="v1.1.9-g720-mc7-8gb-androidsync"; (p/"meta.json").write_text(json.dumps(m,indent=2))'
-          (cd output && zip -9 PanVK-Faux123-1.1.9-G720-MC7-8GB-AndroidSync.adpkg.zip libvulkan_panfrost.so meta.json)
-          unzip -tq output/PanVK-Faux123-1.1.9-G720-MC7-8GB-AndroidSync.adpkg.zip
+          python3 -c 'import json; from pathlib import Path; p=Path("output"); m=json.loads((p/"meta.json").read_text()); assert m["libraryName"]=="libvulkan_panfrost.so"; assert (p/m["libraryName"]).is_file(); m["minApi"]=30; m["name"]="PanVK Faux123 1.1.9 G720 MC7 8GB Vertex17"; m["packageVersion"]="v1.1.9-g720-mc7-8gb-vertex17"; (p/"meta.json").write_text(json.dumps(m,indent=2))'
+          (cd output && zip -9 PanVK-Faux123-1.1.9-G720-MC7-8GB-Vertex17.adpkg.zip libvulkan_panfrost.so meta.json)
+          unzip -tq output/PanVK-Faux123-1.1.9-G720-MC7-8GB-Vertex17.adpkg.zip
 
       - name: Publicar biblioteca compilada
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-G720-MC7-8GB-AndroidSync
+          name: PanVK-G720-MC7-8GB-Vertex17
           path: output/
           if-no-files-found: error
           retention-days: 30
