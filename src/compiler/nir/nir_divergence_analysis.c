@@ -250,6 +250,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_first_vertex:
    case nir_intrinsic_load_draw_id:
    case nir_intrinsic_load_provoking_last:
+   case nir_intrinsic_load_flat_mask:
    case nir_intrinsic_load_is_indexed_draw:
    case nir_intrinsic_load_viewport_scale:
    case nir_intrinsic_load_user_clip_plane:
@@ -402,7 +403,12 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_read_handle_intel:
    case nir_intrinsic_load_ttmp_register_amd:
    case nir_intrinsic_load_scalar_arg_amd:
+   case nir_intrinsic_load_input_topology_poly:
+   case nir_intrinsic_load_index_size_poly:
+   case nir_intrinsic_load_vs_outputs_poly:
    case nir_intrinsic_load_vertex_param_buffer_poly:
+   case nir_intrinsic_load_geometry_param_buffer_poly:
+   case nir_intrinsic_load_stat_query_address_poly:
    case nir_intrinsic_load_tess_param_buffer_poly:
    case nir_intrinsic_load_ro_sink_address_poly:
    case nir_intrinsic_load_noperspective_varyings_pan:
@@ -761,6 +767,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
       break;
 
    /* Intrinsics with divergence depending on sources */
+   case nir_intrinsic_ro_to_rw_poly:
    case nir_intrinsic_convert_alu_types:
    case nir_intrinsic_ddx:
    case nir_intrinsic_ddx_fine:
