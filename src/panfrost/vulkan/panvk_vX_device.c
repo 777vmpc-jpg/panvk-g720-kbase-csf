@@ -460,7 +460,10 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    device->vk.shader_ops = &panvk_per_arch(device_shader_ops);
    device->vk.check_status = panvk_device_check_status;
    device->vk.get_timestamp = panvk_device_get_timestamp;
-   device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+   /* Kbase uses its own sync payloads. Android release fences must go
+    * through queue submission instead of the DRM syncobj shortcut. */
+   if (!physical_device->kbase_node_path[0])
+      device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
 
    device->kmod.allocator = (struct pan_kmod_allocator){
       .zalloc = panvk_kmod_zalloc,
