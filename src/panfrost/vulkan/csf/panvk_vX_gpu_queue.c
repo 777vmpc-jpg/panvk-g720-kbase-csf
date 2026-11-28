@@ -201,26 +201,25 @@ kbase_cache_clean_range(const void *start, size_t size)
    kbase_gpu_wmb();
 }
 
-static inline void
-kbase_cache_invalidate_range(const void *start, size_t size)
+static inline bool
+kbase_cache_invalidate_range(struct panvk_gpu_queue *queue, uint64_t gpu_base,
+                             const void *start, size_t size)
 {
-#if defined(__aarch64__)
-   uintptr_t ptr = (uintptr_t)start & ~(uintptr_t)(KBASE_CACHELINE_SIZE - 1);
-   uintptr_t end = ALIGN_POT((uintptr_t)start + size, KBASE_CACHELINE_SIZE);
-
-   /* These ranges contain data produced by the GPU/CSF firmware.  Do not
-    * clean a potentially stale CPU cache line while invalidating it: a
-    * writeback here can overwrite newer GPU writes to the same line.
-    * DC IVAC discards the CPU copy; the system-scope barrier below orders
-    * subsequent CPU loads after the invalidation. */
-   for (; ptr < end; ptr += KBASE_CACHELINE_SIZE)
-      __asm__ volatile("dc ivac, %0" : : "r"(ptr) : "memory");
-#else
-   (void)start;
-   (void)size;
-#endif
-
+   struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
+   /* DC IVAC is privileged on AArch64. Ask kbase to synchronize
+    * GPU-written completion memory for CPU reads instead. */
+   struct kbase_ioctl_mem_sync req = {
+      .handle = gpu_base,
+      .user_addr = (uintptr_t)start,
+      .size = size,
+      .type = BASE_SYNCSET_OP_CSYNC,
+   };
+   if (pan_kmod_ioctl(dev->kmod.dev->fd, KBASE_IOCTL_MEM_SYNC, &req)) {
+      mesa_loge("kbase: completion cache sync failed: %s", strerror(errno));
+      return false;
+   }
    kbase_gpu_wmb();
+   return true;
 }
 
 static void
@@ -282,8 +281,9 @@ kbase_log_queue_syncobjs(struct panvk_gpu_queue *queue)
    if (!syncobjs)
       return;
 
-   kbase_cache_invalidate_range(syncobjs,
-                                sizeof(*syncobjs) * PANVK_SUBQUEUE_COUNT);
+   if (!kbase_cache_invalidate_range(queue, panvk_priv_mem_dev_addr(queue->syncobjs),
+                                     syncobjs, sizeof(*syncobjs) * PANVK_SUBQUEUE_COUNT))
+      return;
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct panvk_cs_sync64 *syncobj = &syncobjs[i];
@@ -382,7 +382,9 @@ kbase_log_subqueue_state(struct panvk_gpu_queue *queue, uint32_t subqueue,
    uint32_t active =
       *(volatile uint32_t *)(output_page + CS_USER_IO_OUTPUT_CS_ACTIVE);
 
-   kbase_cache_invalidate_range((const void *)cell, kbase_seqno_stride());
+   if (!kbase_cache_invalidate_range(queue, queue->kbase_seqnos.dev,
+                                     (const void *)cell, kbase_seqno_stride()))
+      return;
 
    mesa_loge("kbase: %s subqueue %u: seqno %" PRIu64 ", ls_copy %" PRIu64
              ", target %" PRIu64 ", marks 0x%" PRIx64 "/0x%" PRIx64
@@ -872,7 +874,9 @@ kbase_subqueue_wait_seqno(struct panvk_gpu_queue *queue, uint32_t subqueue,
 
       /* Invalidate before sampling GPU-owned completion state.  The
        * invalidation helper intentionally discards stale CPU lines. */
-      kbase_cache_invalidate_range((const void *)cell, kbase_seqno_stride());
+      if (!kbase_cache_invalidate_range(queue, queue->kbase_seqnos.dev,
+                                        (const void *)cell, kbase_seqno_stride()))
+         return VK_ERROR_DEVICE_LOST;
       if (prev_extract != extract || prev_seqno != cell->seqno) {
          (void)active;
          prev_extract = extract;
