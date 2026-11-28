@@ -2348,6 +2348,14 @@ kbase_kmod_bo_free(struct pan_kmod_bo *bo)
 
    pan_kmod_bo_cleanup(bo);
 
+   /* Release any remaining independent placed alias before the backing BO. */
+   if (kbase_bo->dmabuf_fd >= 0 && kbase_bo->placed_cpu_ptr &&
+       kbase_bo->placed_cpu_ptr != kbase_bo->cpu_ptr &&
+       kbase_bo->placed_cpu_ptr != kbase_bo->gpu_mapping) {
+      munmap(kbase_bo->placed_cpu_ptr, bo->size);
+      kbase_bo->placed_cpu_ptr = NULL;
+   }
+
    /* For SAME_VA regions, munmap() alone tears the whole region down
     * (free-on-close); a MEM_FREE afterwards would hit a stale VA.  For
     * zone regions (EXEC_VA), munmap() only drops the CPU mapping and the
