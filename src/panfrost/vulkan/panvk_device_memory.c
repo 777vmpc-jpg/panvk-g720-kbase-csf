@@ -379,7 +379,13 @@ panvk_MapMemory2KHR(VkDevice _device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
       return panvk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
                           "Memory object couldn't be mapped.");
 
-   assert(!host_addr || addr == host_addr);
+   /* Never report a successful placed map at a different address, even
+    * in release builds where assertions are disabled. */
+   if (host_addr && addr != host_addr) {
+      pan_kmod_bo_munmap(mem->bo, addr, pan_kmod_bo_size(mem->bo));
+      return panvk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
+                          "Placed map returned a different address.");
+   }
    mem->addr.host = addr;
    *ppData = (char *)addr + offset;
 
