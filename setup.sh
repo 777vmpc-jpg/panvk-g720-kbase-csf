@@ -100,7 +100,8 @@ envsubst < android.toml > /tmp/android_wrapper.toml
 
 MESON_ARGS=(
   --cross-file /tmp/android_wrapper.toml
-  -Dbuildtype=debug
+  -Dbuildtype="${PANVK_ANDROID_BUILDTYPE:-debug}"
+  -Db_ndebug=false
   -Dplatforms=android
   -Dandroid-stub=true
   -Dandroid-libbacktrace=disabled
