@@ -367,8 +367,12 @@ panvk_MapMemory2KHR(VkDevice _device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
    if (pMemoryMapInfo->flags & VK_MEMORY_MAP_PLACED_BIT_EXT) {
       const VkMemoryMapPlacedInfoEXT *placed_info = vk_find_struct_const(
          pMemoryMapInfo->pNext, MEMORY_MAP_PLACED_INFO_EXT);
-      assert(placed_info != NULL);
-      assert(offset == 0 && size == mem->bo->size);
+      /* Validate the Vulkan allocation size, not the padded backing BO. */
+      if (!placed_info || !placed_info->pPlacedAddress ||
+          offset != 0 || size != mem->vk.size ||
+          size > mem->bo->size)
+         return panvk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
+                             "Invalid whole-allocation placed map.");
       host_addr = placed_info->pPlacedAddress;
       map_flags |= MAP_FIXED;
    }
