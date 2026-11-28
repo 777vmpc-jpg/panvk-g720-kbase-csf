@@ -983,7 +983,11 @@ panvk_per_arch(CmdBindVertexBuffers2)(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
 
-   assert(firstBinding + bindingCount <= MAX_VBS);
+   /* Ignore out-of-range trailing bindings from non-conforming callers.
+    * Never index past the advertised vertex binding limit. */
+   if (firstBinding >= MAX_VBS || !bindingCount)
+      return;
+   bindingCount = MIN2(bindingCount, MAX_VBS - firstBinding);
 
    if (pStrides) {
       vk_cmd_set_vertex_binding_strides(&cmdbuf->vk, firstBinding,
