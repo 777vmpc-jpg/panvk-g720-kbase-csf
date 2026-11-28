@@ -27,7 +27,12 @@
 #include "pan_fb.h"
 #include "pan_props.h"
 
+#if PAN_ARCH == 12
+/* G720 can use binding 16 for the BOTW runtime's constant vertex stream. */
+#define MAX_VBS 17
+#else
 #define MAX_VBS 16
+#endif
 
 #if PAN_ARCH < 10
 #define MAX_FRAMEBUFFER_DIMENSION (1 << 14)
