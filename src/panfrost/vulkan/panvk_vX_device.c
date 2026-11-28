@@ -461,6 +461,12 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    device->vk.check_status = panvk_device_check_status;
    device->vk.get_timestamp = panvk_device_get_timestamp;
    device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+#ifdef HAVE_PAN_KMOD_KBASE
+   /* Kbase syncs are not DRM syncobjs. Use the runtime queue-submit path
+    * for Android release fences and other semaphore payload transfers. */
+   if (physical_device->kbase_node_path[0])
+      device->vk.copy_sync_payloads = NULL;
+#endif
 
    device->kmod.allocator = (struct pan_kmod_allocator){
       .zalloc = panvk_kmod_zalloc,
