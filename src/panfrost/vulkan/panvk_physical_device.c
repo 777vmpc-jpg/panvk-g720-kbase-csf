@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 23079)
-Total output lines: 2605
-
 /*
  * Copyright © 2021 Collabora Ltd.
  * Copyright © 2026 Google LLC
@@ -1262,7 +1259,247 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    if (arch != 10)
       vk_warn_non_conformant_implementation("panvk");
 
-   struct vk_device_e…2079 tokens truncated…yProperties qfamily_props[PANVK_QUEUE_FAMILY_COUNT] = {
+   struct vk_device_extension_table supported_extensions;
+   panvk_arch_dispatch(arch, get_physical_device_extensions, device, instance,
+                       &supported_extensions);
+
+   struct vk_features supported_features;
+   panvk_arch_dispatch(arch, get_physical_device_features, instance,
+                       device, &supported_features);
+
+   struct vk_physical_device_dispatch_table dispatch_table;
+   vk_physical_device_dispatch_table_from_entrypoints(
+      &dispatch_table, &panvk_physical_device_entrypoints, true);
+   vk_physical_device_dispatch_table_from_entrypoints(
+      &dispatch_table, &wsi_physical_device_entrypoints, false);
+
+   result =
+      vk_physical_device_init(&device->vk, &instance->vk, &supported_extensions,
+                              &supported_features, NULL, &dispatch_table);
+
+   if (result != VK_SUCCESS)
+      goto fail;
+
+   /* initialize disk cache after vk_physical_device_init */
+   init_shader_caches(device, instance);
+
+   /* pipeline binary props rely on disk cache init state */
+   panvk_arch_dispatch(arch, get_physical_device_properties, instance, device,
+                       &device->vk.properties);
+
+   device->vk.supported_sync_types = device->sync_types;
+
+   result = panvk_wsi_init(device);
+   if (result != VK_SUCCESS)
+      goto fail;
+
+   return VK_SUCCESS;
+
+fail:
+   free_disk_cache(device);
+
+   if (device->vk.instance)
+      vk_physical_device_finish(&device->vk);
+
+   pan_kmod_dev_destroy(device->kmod.dev);
+
+   return result;
+}
+
+#if defined(HAVE_PAN_KMOD_KBASE)
+VkResult
+panvk_physical_device_init_kbase(struct panvk_physical_device *device,
+                                 struct panvk_instance *instance,
+                                 const char *path)
+{
+   VkResult result;
+
+   result = create_kmod_dev_kbase(device, instance, path);
+   if (result != VK_SUCCESS)
+      return result;
+
+   unsigned arch = pan_arch(device->kmod.dev->props.gpu_id);
+
+   bool unknown_gpu;
+   result = get_gpu_model(device, instance, &unknown_gpu);
+   if (result != VK_SUCCESS)
+      goto fail_kbase;
+
+   log_compressed_texture_features(device);
+
+   switch (arch) {
+   case 6:
+   case 7:
+   case 14:
+      if (!os_get_option("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER")) {
+         result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+                               "WARNING: panvk is not well-tested on v%d, "
+                               "pass PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1 "
+                               "if you know what you're doing.", arch);
+         goto fail_kbase;
+      }
+      break;
+
+   case 10:
+   case 11:
+   case 12:
+   case 13:
+      break;
+
+   default:
+      result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+                            "%s not supported", device->model->name);
+      goto fail_kbase;
+   }
+
+   /* kbase does not expose DRM nodes, so drm.{render,primary}_rdev are left
+    * zeroed; WSI paths that compare rdev values will simply not match. */
+
+   device->formats.all = pan_format_table(arch);
+   device->formats.blendable = pan_blendable_format_table(arch);
+
+   unsigned core_count =
+      pan_query_core_count(&device->kmod.dev->props);
+
+   memset(device->name, 0, sizeof(device->name));
+   if (unknown_gpu)
+      snprintf(device->name, sizeof(device->name),
+               "Mali unknown 0x%" PRIx64 " MC%u",
+               device->kmod.dev->props.gpu_id, core_count);
+   else
+      sprintf(device->name, "%s MC%u", device->model->name, core_count);
+
+   result = get_core_masks(device, instance);
+   if (result != VK_SUCCESS)
+      goto fail_kbase;
+
+   result = get_device_heaps(device, instance);
+   if (result != VK_SUCCESS)
+      goto fail_kbase;
+
+   result = get_device_sync_types_kbase(device, instance);
+   if (result != VK_SUCCESS)
+      goto fail_kbase;
+
+   if (arch >= 10) {
+      /* 1 MiB chunks instead of the 2 MiB DRM-path default, as a
+       * precaution against allocation failure under memory fragmentation:
+       * kbase prefers order-9 huge pages for 2 MiB-aligned tiler-heap
+       * chunks, and on a long-running Android system the order >= 4 free
+       * lists are typically empty while gigabytes of order-0 pages remain.
+       * 1 MiB chunks take the discontiguous small-page path, which only
+       * needs order-0 pages; the GPU MMU provides the virtual contiguity.
+       * Chunk counts are doubled to keep the same byte budget. */
+      device->csf.tiler.chunk_size = 1024 * 1024;
+      device->csf.tiler.initial_chunks = 10;
+      device->csf.tiler.max_chunks = 400;
+   }
+
+   if (arch != 10)
+      vk_warn_non_conformant_implementation("panvk");
+
+   struct vk_device_extension_table supported_extensions;
+   panvk_arch_dispatch(arch, get_physical_device_extensions, device, instance,
+                       &supported_extensions);
+   mesa_logi("panvk: kbase placed-memory advertisement: %s (DMA-BUF alias %s)",
+             supported_extensions.EXT_map_memory_placed ? "enabled" : "disabled",
+             kbase_kmod_supports_dmabuf(device->kmod.dev) ? "validated" : "unavailable");
+
+   struct vk_features supported_features;
+   panvk_arch_dispatch(arch, get_physical_device_features, instance,
+                       device, &supported_features);
+
+   struct vk_physical_device_dispatch_table dispatch_table;
+   vk_physical_device_dispatch_table_from_entrypoints(
+      &dispatch_table, &panvk_physical_device_entrypoints, true);
+   vk_physical_device_dispatch_table_from_entrypoints(
+      &dispatch_table, &wsi_physical_device_entrypoints, false);
+
+   result =
+      vk_physical_device_init(&device->vk, &instance->vk, &supported_extensions,
+                              &supported_features, NULL, &dispatch_table);
+
+   if (result != VK_SUCCESS)
+      goto fail_kbase;
+
+   init_shader_caches(device, instance);
+
+   panvk_arch_dispatch(arch, get_physical_device_properties, instance, device,
+                       &device->vk.properties);
+
+   device->vk.supported_sync_types = device->sync_types;
+
+   result = panvk_wsi_init(device);
+   if (result != VK_SUCCESS)
+      goto fail_kbase;
+
+   return VK_SUCCESS;
+
+fail_kbase:
+   free_disk_cache(device);
+
+   if (device->vk.instance)
+      vk_physical_device_finish(&device->vk);
+
+   pan_kmod_dev_destroy(device->kmod.dev);
+
+   return result;
+}
+#endif /* HAVE_PAN_KMOD_KBASE */
+
+static void
+panvk_fill_global_priority(const struct panvk_physical_device *physical_device,
+                           uint32_t family_idx,
+                           VkQueueFamilyGlobalPriorityPropertiesKHR *prio)
+{
+   const unsigned arch = pan_arch(physical_device->kmod.dev->props.gpu_id);
+   uint32_t prio_idx = 0;
+
+   switch (family_idx) {
+   case PANVK_QUEUE_FAMILY_GPU: {
+      enum pan_kmod_group_allow_priority_flags prio_mask =
+         physical_device->kmod.dev->props.allowed_group_priorities_mask;
+
+      /* Non-medium priority context is not hooked-up in the JM backend, even
+       * though the panfrost kmod advertize it. Manually filter non-medium
+       * priority for now.
+       */
+      if (arch < 10)
+         prio_mask &= PAN_KMOD_GROUP_ALLOW_PRIORITY_MEDIUM;
+
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_LOW)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_MEDIUM)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_HIGH)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_REALTIME)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR;
+      break;
+   }
+
+   case PANVK_QUEUE_FAMILY_BIND:
+      prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+      break;
+
+   default:
+      UNREACHABLE("Unknown queue family");
+   }
+
+   prio->priorityCount = prio_idx;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_GetPhysicalDeviceQueueFamilyProperties2(
+   VkPhysicalDevice physicalDevice, uint32_t *pQueueFamilyPropertyCount,
+   VkQueueFamilyProperties2 *pQueueFamilyProperties)
+{
+   VK_FROM_HANDLE(panvk_physical_device, physical_device, physicalDevice);
+   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties2, out, pQueueFamilyProperties,
+                          pQueueFamilyPropertyCount);
+   unsigned arch = pan_arch(physical_device->kmod.dev->props.gpu_id);
+
+   const VkQueueFamilyProperties qfamily_props[PANVK_QUEUE_FAMILY_COUNT] = {
       [PANVK_QUEUE_FAMILY_GPU] = {
          .queueFlags =
             VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT |
