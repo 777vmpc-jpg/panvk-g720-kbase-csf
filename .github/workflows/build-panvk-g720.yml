@@ -252,8 +252,8 @@ jobs:
           cat > output/meta.json <<'JSON'
           {
             "schemaVersion": 1,
-            "name": "PanVK G720 MC7 BOTW + Peanuts ICD Fix",
-            "packageVersion": "1.1.9-botw-peanuts-icd-fix",
+            "name": "PanVK G720 MC7 BOTW + Peanuts ICD Fix 2",
+            "packageVersion": "1.1.9-botw-peanuts-icd-fix-2",
             "driverVersion": "26.3.0-devel",
             "vendor": "Mesa / PanVK",
             "minApi": 30,
