@@ -7,6 +7,7 @@ on:
       - panvk/mc7-timestamp-compat
     paths:
       - src/panfrost/vulkan/panvk_cmd_draw.h
+      - .github/workflows/build-panvk-g720.yml
 
 permissions:
   contents: read
@@ -247,6 +248,7 @@ jobs:
         run: |
           set -euo pipefail
           bash ./setup.sh
+          meson configure build -Dbuildtype=debugoptimized -Db_ndebug=false
           meson compile -C build
 
       - name: Localizar biblioteca compilada
@@ -320,14 +322,14 @@ jobs:
           readelf -d output/libvulkan_panfrost.so | tee output/ELF-DYNAMIC.txt
           readelf --dyn-syms --wide output/libvulkan_panfrost.so > output/ELF-SYMBOLS.txt
           grep -Eq 'GLOBAL.*DEFAULT.*[0-9]+ +vk_icdGetInstanceProcAddr$' output/ELF-SYMBOLS.txt
-          python3 -c 'import json; from pathlib import Path; p=Path("output"); m=json.loads((p/"meta.json").read_text()); assert m["libraryName"]=="libvulkan_panfrost.so"; assert (p/m["libraryName"]).is_file(); m["minApi"]=30; m["name"]="PanVK Faux123 1.1.9 G720 MC7 8GB Vertex17"; m["packageVersion"]="v1.1.9-g720-mc7-8gb-vertex17"; (p/"meta.json").write_text(json.dumps(m,indent=2))'
-          (cd output && zip -9 PanVK-Faux123-1.1.9-G720-MC7-8GB-Vertex17.adpkg.zip libvulkan_panfrost.so meta.json)
-          unzip -tq output/PanVK-Faux123-1.1.9-G720-MC7-8GB-Vertex17.adpkg.zip
+          python3 -c 'import json; from pathlib import Path; p=Path("output"); m=json.loads((p/"meta.json").read_text()); assert m["libraryName"]=="libvulkan_panfrost.so"; assert (p/m["libraryName"]).is_file(); m["minApi"]=30; m["name"]="PanVK Faux123 1.1.9 G720 MC7 8GB Vertex17-O2"; m["packageVersion"]="v1.1.9-g720-mc7-8gb-vertex17-o2"; (p/"meta.json").write_text(json.dumps(m,indent=2))'
+          (cd output && zip -9 PanVK-Faux123-1.1.9-G720-MC7-8GB-Vertex17-O2.adpkg.zip libvulkan_panfrost.so meta.json)
+          unzip -tq output/PanVK-Faux123-1.1.9-G720-MC7-8GB-Vertex17-O2.adpkg.zip
 
       - name: Publicar biblioteca compilada
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-G720-MC7-8GB-Vertex17
+          name: PanVK-G720-MC7-8GB-Vertex17-O2
           path: output/
           if-no-files-found: error
           retention-days: 30
