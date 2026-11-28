@@ -2432,13 +2432,13 @@ kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags,
       return MAP_FAILED;
    }
 
-   if (host_addr && host_addr != kbase_bo->cpu_ptr) {
-      if (kbase_bo->dmabuf_fd < 0) {
-         mesa_loge("kbase: placed mapping requires a dma-buf backed BO");
-         errno = ENOTSUP;
-         return MAP_FAILED;
-      }
+   if (host_addr && kbase_bo->dmabuf_fd < 0) {
+      mesa_loge("kbase: placed mapping requires a dma-buf backed BO");
+      errno = ENOTSUP;
+      return MAP_FAILED;
+   }
 
+   if (host_addr && host_addr != kbase_bo->cpu_ptr) {
       void *alias = mmap(host_addr, bo->size, prot,
                          (flags & ~MAP_PRIVATE) | MAP_SHARED | MAP_FIXED,
                          kbase_bo->dmabuf_fd, 0);
