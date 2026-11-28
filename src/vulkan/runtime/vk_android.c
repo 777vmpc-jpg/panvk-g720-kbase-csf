@@ -190,21 +190,13 @@ vk_gralloc_to_drm_explicit_layout(
    return VK_SUCCESS;
 }
 
-VkResult
-vk_android_import_anb_memory(struct vk_device *device,
+static VkResult
+vk_android_import_anb_fd(struct vk_device *device,
                              struct vk_image *image,
-                             const VkNativeBufferANDROID *anb,
+                             int dma_buf_fd,
+                             VkMemoryRequirements mem_reqs,
                              const VkAllocationCallbacks *alloc)
 {
-   assert(anb && anb->handle && anb->handle->numFds > 0);
-
-   int dma_buf_fd = anb->handle->data[0];
-
-   /* Query image memory requirements for size and supported memory types */
-   VkMemoryRequirements mem_reqs;
-   device->dispatch_table.GetImageMemoryRequirements(
-      (VkDevice)device, (VkImage)image, &mem_reqs);
-
    VkMemoryFdPropertiesKHR fd_props = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
    };
@@ -258,6 +250,42 @@ vk_android_import_anb_memory(struct vk_device *device,
    }
 
    return VK_SUCCESS;
+}
+
+VkResult
+vk_android_import_anb_memory(struct vk_device *device,
+                             struct vk_image *image,
+                             const VkNativeBufferANDROID *anb,
+                             const VkAllocationCallbacks *alloc)
+{
+   if (!anb || !anb->handle || anb->handle->numFds <= 0)
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+   VkMemoryRequirements mem_reqs;
+   device->dispatch_table.GetImageMemoryRequirements(
+      (VkDevice)device, (VkImage)image, &mem_reqs);
+
+   VkResult result = vk_android_import_anb_fd(
+      device, image, anb->handle->data[0], mem_reqs, alloc);
+   if (result != VK_ERROR_INVALID_EXTERNAL_HANDLE)
+      return result;
+
+   /* Some Android handles include auxiliary FDs before the image backing.
+    * Only try additional FDs that can cover the complete image allocation. */
+   for (int i = 1; i < anb->handle->numFds; i++) {
+      const int fd = anb->handle->data[i];
+      const off_t size = lseek(fd, 0, SEEK_END);
+      if (size <= 0 || (uint64_t)size < mem_reqs.size)
+         continue;
+
+      result = vk_android_import_anb_fd(device, image, fd, mem_reqs, alloc);
+      if (result == VK_SUCCESS)
+         mesa_logi("Gralloc image imported from native handle fd[%d]", i);
+      if (result != VK_ERROR_INVALID_EXTERNAL_HANDLE)
+         return result;
+   }
+
+   return VK_ERROR_INVALID_EXTERNAL_HANDLE;
 }
 
 VkResult

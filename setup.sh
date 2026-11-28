@@ -111,6 +111,7 @@ MESON_ARGS=(
   --cross-file /tmp/android_wrapper.toml
   -Dbuildtype=debug
   -Dplatforms=android
+  -Dandroid-strict=false
   -Dandroid-stub=true
   -Dandroid-libbacktrace=disabled
   -Dplatform-sdk-version=30
