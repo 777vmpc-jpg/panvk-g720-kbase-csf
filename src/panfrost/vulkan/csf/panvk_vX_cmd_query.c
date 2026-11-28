@@ -390,27 +390,33 @@ panvk_cmd_reset_timestamp_queries(struct panvk_cmd_buffer *cmd,
 }
 
 static uint32_t
-vk_stage_to_timestamp_subqueue_mask(VkPipelineStageFlagBits2 vk_stage)
+vk_stage_to_timestamp_subqueue_mask(VkPipelineStageFlags2 vk_stage)
 {
-   assert(util_bitcount64(vk_stage) == 1);
+   /* Synchronization2 accepts a stage mask. Preserve the special timestamp
+    * semantics for TOP/BOTTOM/HOST and combine the remaining subqueues. */
+   uint32_t result = 0;
+   if (vk_stage & VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT)
+      result |= BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER) |
+                BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
+   if (vk_stage & VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT)
+      result |= BITFIELD_BIT(PANVK_SUBQUEUE_FRAGMENT) |
+                BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
+   if (vk_stage & VK_PIPELINE_STAGE_2_HOST_BIT)
+      result |= BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
 
-   /* Handle special stages. */
-   if (vk_stage == VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT)
-      return BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER) |
-             BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
-   if (vk_stage == VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT)
-      return BITFIELD_BIT(PANVK_SUBQUEUE_FRAGMENT) |
-             BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
-   if (vk_stage == VK_PIPELINE_STAGE_2_HOST_BIT)
-      /* We need to map host to something, so map it to compute to not interfer
-       * with drawing. */
-      return BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
+   VkPipelineStageFlags2 remaining = vk_stage &
+      ~(VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT |
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT |
+        VK_PIPELINE_STAGE_2_HOST_BIT);
+   if (remaining)
+      result |= vk_stages_to_subqueue_mask(remaining, SYNC_SCOPE_FIRST);
 
-   uint32_t result = vk_stages_to_subqueue_mask(vk_stage, SYNC_SCOPE_FIRST);
-
-   /* All stages should map to at least one subqueue. */
-   assert(util_bitcount(result) > 0);
-
+   /* A zero or unmapped mask must not leave a query without a producer.
+    * Conservatively timestamp all GPU subqueues in that case. */
+   if (!result)
+      result = BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER) |
+               BITFIELD_BIT(PANVK_SUBQUEUE_FRAGMENT) |
+               BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
    return result;
 }
 
