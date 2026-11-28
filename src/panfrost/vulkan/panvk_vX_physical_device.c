@@ -24,6 +24,7 @@
 #include "panvk_descriptor_set_layout.h"
 #include "panvk_physical_device.h"
 #include "panvk_wsi.h"
+#include "kmod/kbase_kmod.h"
 
 #include "pan_format.h"
 #include "pan_props.h"
@@ -179,7 +180,8 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_legacy_dithering = true,
       .EXT_line_rasterization = true,
       .EXT_load_store_op_none = true,
-      .EXT_map_memory_placed = true,
+      .EXT_map_memory_placed = !device->kbase_node_path[0] ||
+                        kbase_kmod_supports_dmabuf(device->kmod.dev),
       .EXT_nested_command_buffer = PAN_ARCH >= 10,
       .EXT_memory_budget = true,
       .EXT_non_seamless_cube_map = true,
@@ -709,9 +711,10 @@ panvk_per_arch(get_physical_device_features)(
       .nestedCommandBufferSimultaneousUse = PAN_ARCH >= 10,
 
       /* VK_EXT_map_memory_placed */
-      .memoryMapPlaced = true,
+      .memoryMapPlaced = !device->kbase_node_path[0] ||
+                         kbase_kmod_supports_dmabuf(device->kmod.dev),
       .memoryMapRangePlaced = false,
-      .memoryUnmapReserve = true,
+      .memoryUnmapReserve = !device->kbase_node_path[0],
 
       /* VK_EXT_non_seamless_cube_map */
       .nonSeamlessCubeMap = true,
@@ -907,7 +910,7 @@ panvk_per_arch(get_physical_device_properties)(
       /* Software limit to keep VkCommandBuffer tracking sane. The HW supports
        * up to 2^9 vertex attributes.
        */
-      .maxVertexInputAttributes = MAX_VBS,
+      .maxVertexInputAttributes = 16,
       .maxVertexInputBindings = MAX_VBS,
       /* MALI_ATTRIBUTE::offset is 32-bit. */
       .maxVertexInputAttributeOffset = UINT32_MAX,

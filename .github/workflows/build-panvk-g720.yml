@@ -9,6 +9,7 @@ on:
     branches:
       - g720-development
       - auto-build-mc7-v1.1.9f
+      - panvk/mc7-botw-peanuts-candidate
 
 permissions:
   contents: read
@@ -240,7 +241,21 @@ jobs:
         run: |
           set -euo pipefail
           cp output-heap.txt output/HEAP-SETTINGS.txt
-          (cd output && zip -9 PanVK-G720-MC7-ARM64.zip libvulkan_panfrost.so BUILD-INFO.txt HEAP-SETTINGS.txt)
+          readelf -h output/libvulkan_panfrost.so | grep -E 'Machine:.*AArch64'
+          cat > output/meta.json <<'JSON'
+          {
+            "schemaVersion": 1,
+            "name": "PanVK G720 MC7 BOTW + Peanuts Candidate",
+            "packageVersion": "1.1.9-botw-peanuts-candidate",
+            "driverVersion": "26.3.0-devel",
+            "vendor": "Mesa / PanVK",
+            "minApi": 30,
+            "libraryName": "libvulkan_panfrost.so"
+          }
+          JSON
+          python3 -m json.tool output/meta.json >/dev/null
+          (cd output && zip -9 PanVK-G720-MC7-ARM64.zip libvulkan_panfrost.so meta.json BUILD-INFO.txt HEAP-SETTINGS.txt)
+          unzip -t output/PanVK-G720-MC7-ARM64.zip
           sha256sum output/PanVK-G720-MC7-ARM64.zip
 
       - name: Publicar biblioteca compilada

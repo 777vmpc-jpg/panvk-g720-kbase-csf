@@ -12,6 +12,8 @@
 #include "panvk_device_memory.h"
 #include "panvk_entrypoints.h"
 
+#include <unistd.h>
+
 #include "pan_props.h"
 
 #include "util/u_atomic.h"
@@ -125,9 +127,18 @@ panvk_AllocateMemory(VkDevice _device,
           (type->propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
          bo_flags |= PAN_KMOD_BO_FLAG_WB_MMAP;
 
+      /* VK_EXT_map_memory_placed requires host-visible allocations to
+       * be backed by shareable memory. On kbase this selects dma-heap BOs,
+       * which can be exported and mapped at a caller-chosen VA. Keep the
+       * original private-VM path for allocations that cannot be host mapped. */
+      const bool shareable =
+         can_be_exported ||
+         (device->vk.enabled_features.memoryMapPlaced &&
+          (type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT));
+
       bo_flags = panvk_device_adjust_bo_flags(device, bo_flags);
       mem->bo = pan_kmod_bo_alloc(device->kmod.dev,
-                                  can_be_exported ? NULL : device->kmod.vm,
+                                  shareable ? NULL : device->kmod.vm,
                                   pAllocateInfo->allocationSize, bo_flags);
       if (!mem->bo) {
          result = panvk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
@@ -356,8 +367,12 @@ panvk_MapMemory2KHR(VkDevice _device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
    if (pMemoryMapInfo->flags & VK_MEMORY_MAP_PLACED_BIT_EXT) {
       const VkMemoryMapPlacedInfoEXT *placed_info = vk_find_struct_const(
          pMemoryMapInfo->pNext, MEMORY_MAP_PLACED_INFO_EXT);
-      assert(placed_info != NULL);
-      assert(offset == 0 && size == mem->bo->size);
+      /* Validate the Vulkan allocation size, not the padded backing BO. */
+      if (!placed_info || !placed_info->pPlacedAddress ||
+          offset != 0 || size != mem->vk.size ||
+          size > mem->bo->size)
+         return panvk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
+                             "Invalid whole-allocation placed map.");
       host_addr = placed_info->pPlacedAddress;
       map_flags |= MAP_FIXED;
    }
@@ -368,7 +383,13 @@ panvk_MapMemory2KHR(VkDevice _device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
       return panvk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
                           "Memory object couldn't be mapped.");
 
-   assert(!host_addr || addr == host_addr);
+   /* Never report a successful placed map at a different address, even
+    * in release builds where assertions are disabled. */
+   if (host_addr && addr != host_addr) {
+      pan_kmod_bo_munmap(mem->bo, addr, pan_kmod_bo_size(mem->bo));
+      return panvk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
+                          "Placed map returned a different address.");
+   }
    mem->addr.host = addr;
    *ppData = (char *)addr + offset;
 
@@ -478,6 +499,37 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
       to_panvk_physical_device(device->vk.physical);
 
    assert(handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+
+   /* A kbase UMM import allocates a temporary SAME_VA mapping.  Repeated
+    * query/free cycles for the same dma-buf can tear down kbase GPU PTEs and
+    * leave a later real import with a stale VA.  For our shareable kbase
+    * allocations the import flags are fixed (visible + coherent, uncached),
+    * so derive the compatible memory types without creating a GPU mapping. */
+   if (phys_dev->kbase_node_path[0]) {
+      if (fd < 0 || lseek(fd, 0, SEEK_END) <= 0)
+         return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+      const bool can_do_host_visible = true;
+      const bool can_do_host_coherent = true;
+      const bool can_do_host_cached = false;
+
+      pMemoryFdProperties->memoryTypeBits = 0;
+      for (uint32_t i = 0; i < phys_dev->memory.type_count; i++) {
+         VkMemoryPropertyFlags flags = phys_dev->memory.types[i].propertyFlags;
+         if (!can_do_host_visible &&
+             (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+            continue;
+         if (!can_do_host_coherent &&
+             (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+            continue;
+         if (!can_do_host_cached &&
+             (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
+            continue;
+
+         pMemoryFdProperties->memoryTypeBits |= BITFIELD_BIT(i);
+      }
+      return VK_SUCCESS;
+   }
 
    struct pan_kmod_bo *bo = pan_kmod_bo_import(device->kmod.dev, fd);
    if (!bo)

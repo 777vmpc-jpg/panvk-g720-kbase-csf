@@ -34,15 +34,21 @@
  *    memory management.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/dma-heap.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <dlfcn.h>
+#endif
 
 #include "util/macros.h"
 #include "util/os_time.h"
@@ -69,6 +75,80 @@
 
 /* Forward declaration — the full definition is at the end of this file. */
 const struct pan_kmod_ops kbase_kmod_ops;
+
+/* Probe the complete DMA-HEAP -> kbase import -> exact-address alias path
+ * before advertising VK_EXT_map_memory_placed. */
+static bool kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev);
+static bool kbase_kmod_probe_ahb(struct pan_kmod_dev *dev);
+
+/* Peanuts Native does not consistently package Mesa's normal log stream.
+ * Try the launcher-selected files first, then app-private locations which
+ * remain writable under Android scoped-storage rules. Flush every record so
+ * a crash cannot discard the memory-probe evidence. */
+static void
+kbase_diag(const char *fmt, ...)
+{
+   char message[1024];
+   va_list ap;
+   va_start(ap, fmt);
+   vsnprintf(message, sizeof(message), fmt, ap);
+   va_end(ap);
+
+   mesa_logi("kbase-diag: %s", message);
+
+   const char *candidates[4] = {
+      getenv("PANVK_KBASE_DIAG_FILE"),
+      getenv("MESA_LOG_FILE"),
+      NULL,
+      NULL,
+   };
+   char dm_temp_path[1024];
+   char home_path[1024];
+   const char *dm_temp = getenv("DM_TEMP");
+   const char *home = getenv("HOME");
+
+   if (dm_temp && dm_temp[0]) {
+      snprintf(dm_temp_path, sizeof(dm_temp_path),
+               "%s/panvk-kbase.log", dm_temp);
+      candidates[2] = dm_temp_path;
+   }
+   if (home && home[0]) {
+      snprintf(home_path, sizeof(home_path),
+               "%s/panvk-kbase.log", home);
+      candidates[3] = home_path;
+   }
+
+   for (unsigned i = 0; i < ARRAY_SIZE(candidates); i++) {
+      const char *path = candidates[i];
+      if (!path || !path[0])
+         continue;
+
+      bool duplicate = false;
+      for (unsigned j = 0; j < i; j++) {
+         if (candidates[j] && strcmp(path, candidates[j]) == 0) {
+            duplicate = true;
+            break;
+         }
+      }
+      if (duplicate)
+         continue;
+
+      FILE *file = fopen(path, "a");
+      if (!file) {
+         fprintf(stderr, "[panvk-kbase] cannot append %s: %s\n",
+                 path, strerror(errno));
+         continue;
+      }
+
+      fprintf(file, "[panvk-kbase] %s\n", message);
+      fflush(file);
+      fclose(file);
+      return;
+   }
+
+   fprintf(stderr, "[panvk-kbase] %s\n", message);
+   fflush(stderr);
+}
 
 /* -------------------------------------------------------------------------
  * Internal device / BO / VM objects
@@ -105,6 +185,8 @@ struct kbase_kmod_dev {
 
    /* Android dma-heap used for BOs which need to be shared with WSI. */
    int dma_heap_fd;
+   /* Gralloc BLOB fallback, validated for exact-address dma-buf aliasing. */
+   bool ahb_shareable;
 
    /* Set when the CSF notification stream reports a queue-group error.
     * Vulkan queue status queries use this latch instead of invalidating and
@@ -150,6 +232,8 @@ struct kbase_kmod_bo {
    /* CPU mapping established at allocation time, valid for the whole BO
     * lifetime.  bo_mmap returns it; bo_munmap is a no-op. */
    void *cpu_ptr;
+   /* Active application-requested alias, used as the cache-sync address. */
+   void *placed_cpu_ptr;
 
    /* Mapping on the kbase fd which establishes the GPU VA.  This differs
     * from cpu_ptr for imported dma-bufs: Pixel kbase UMM mappings reserve the
@@ -176,7 +260,7 @@ kbase_kmod_supports_dmabuf(const struct pan_kmod_dev *dev)
    const struct kbase_kmod_dev *kbase_dev =
       container_of(dev, const struct kbase_kmod_dev, base);
 
-   return kbase_dev->dma_heap_fd >= 0;
+   return kbase_dev->dma_heap_fd >= 0 || kbase_dev->ahb_shareable;
 }
 
 /* -------------------------------------------------------------------------
@@ -1458,6 +1542,9 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    kbase_dev->next_handle = 1;
    kbase_dev->dma_heap_fd = -1;
    kbase_dev->kcpu.fence_fd = -1;
+   kbase_diag("device init: CSF=%d, MESA_LOG_FILE=%s, PANVK_KBASE_DIAG_FILE=%s",
+              is_csf, getenv("MESA_LOG_FILE") ? getenv("MESA_LOG_FILE") : "(unset)",
+              getenv("PANVK_KBASE_DIAG_FILE") ? getenv("PANVK_KBASE_DIAG_FILE") : "(unset)");
    simple_mtx_init(&kbase_dev->kcpu.lock, mtx_plain);
    simple_mtx_init(&kbase_dev->sync_exports.lock, mtx_plain);
    kbase_dev->sync_exports.head = NULL;
@@ -1494,14 +1581,129 @@ kbase_kmod_dev_create(int fd, uint32_t flags,
    kbase_dev_query_props(kbase_dev, props_buf, props_size);
    free(props_buf);
 
-   const char *dma_heap = getenv("PANVK_KBASE_DMA_HEAP");
-   if (!dma_heap || !dma_heap[0])
-      dma_heap = "/dev/dma_heap/system";
+   /* Android commonly exposes both cached and uncached system heaps.
+    * Try an explicit override first, then each standard heap name. A heap
+    * is usable only if allocation, Kbase import and the exact-address
+    * dma-buf alias probe all pass; do not stop at the first path that opens. */
+   const char *dma_heap_override = getenv("PANVK_KBASE_DMA_HEAP");
+   const char *dma_heaps[] = {
+      dma_heap_override,
+      "/dev/dma_heap/system",
+      "/dev/dma_heap/system-uncached",
+      "/dev/dma_heap/system_uncached",
+   };
 
-   kbase_dev->dma_heap_fd = open(dma_heap, O_RDONLY | O_CLOEXEC);
-   if (kbase_dev->dma_heap_fd < 0)
-      mesa_logd("kbase: dma-heap unavailable at %s: %s", dma_heap,
-                strerror(errno));
+   for (unsigned i = 0; i < ARRAY_SIZE(dma_heaps); i++) {
+      const char *path = dma_heaps[i];
+      if (!path || !path[0])
+         continue;
+
+      bool duplicate = false;
+      for (unsigned j = 0; j < i; j++) {
+         if (dma_heaps[j] && !strcmp(path, dma_heaps[j])) {
+            duplicate = true;
+            break;
+         }
+      }
+      if (duplicate)
+         continue;
+
+      int heap_fd = open(path, O_RDONLY | O_CLOEXEC);
+      if (heap_fd < 0)
+         heap_fd = open(path, O_RDWR | O_CLOEXEC);
+
+      if (heap_fd < 0) {
+         kbase_diag("DMA-HEAP open failed: path=%s errno=%d (%s)",
+                    path, errno, strerror(errno));
+         mesa_logd("kbase: cannot open DMA-HEAP %s: %s", path,
+                   strerror(errno));
+         continue;
+      }
+
+      kbase_dev->dma_heap_fd = heap_fd;
+      kbase_diag("testing DMA-HEAP: path=%s fd=%d", path, heap_fd);
+      mesa_logi("kbase: testing DMA-HEAP %s", path);
+      if (kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
+         kbase_diag("DMA-HEAP selected: path=%s fd=%d", path, heap_fd);
+         mesa_logi("kbase: selected DMA-HEAP %s for placed memory", path);
+         break;
+      }
+
+      kbase_diag("DMA-HEAP full probe failed: path=%s; continuing", path);
+      mesa_logw("kbase: DMA-HEAP %s failed the full placed-memory probe; "
+                "trying the next heap", path);
+      close(kbase_dev->dma_heap_fd);
+      kbase_dev->dma_heap_fd = -1;
+   }
+
+   /* Vendor Android builds may expose usable heaps under names that are
+    * not part of the common system/system-uncached set. Enumerate the
+    * directory only after the preferred paths fail. Every candidate still
+    * has to pass DMA_HEAP_ALLOC, KBASE import, export, fixed-address alias,
+    * bidirectional visibility and mprotect before it can be selected. */
+   if (kbase_dev->dma_heap_fd < 0) {
+      DIR *heap_dir = opendir("/dev/dma_heap");
+      if (heap_dir) {
+         struct dirent *entry;
+         while (kbase_dev->dma_heap_fd < 0 &&
+                (entry = readdir(heap_dir)) != NULL) {
+            if (entry->d_name[0] == '.')
+               continue;
+
+            char path[256];
+            int len = snprintf(path, sizeof(path), "/dev/dma_heap/%s",
+                               entry->d_name);
+            if (len < 0 || (size_t)len >= sizeof(path))
+               continue;
+
+            bool duplicate = false;
+            for (unsigned i = 0; i < ARRAY_SIZE(dma_heaps); i++) {
+               if (dma_heaps[i] && !strcmp(path, dma_heaps[i])) {
+                  duplicate = true;
+                  break;
+               }
+            }
+            if (duplicate)
+               continue;
+
+            int heap_fd = open(path, O_RDONLY | O_CLOEXEC);
+            if (heap_fd < 0)
+               heap_fd = open(path, O_RDWR | O_CLOEXEC);
+            if (heap_fd < 0) {
+               mesa_logd("kbase: cannot open discovered DMA-HEAP %s: %s",
+                         path, strerror(errno));
+               continue;
+            }
+
+            kbase_dev->dma_heap_fd = heap_fd;
+            mesa_logi("kbase: testing discovered DMA-HEAP %s", path);
+            if (kbase_kmod_probe_dma_heap(&kbase_dev->base)) {
+               mesa_logi("kbase: selected discovered DMA-HEAP %s for placed memory",
+                         path);
+               break;
+            }
+
+            mesa_logw("kbase: discovered DMA-HEAP %s failed placed-memory "
+                      "validation", path);
+            close(kbase_dev->dma_heap_fd);
+            kbase_dev->dma_heap_fd = -1;
+         }
+         closedir(heap_dir);
+      } else {
+         mesa_logd("kbase: cannot enumerate /dev/dma_heap: %s",
+                   strerror(errno));
+      }
+   }
+
+   {
+      kbase_diag("validating AHardwareBuffer as a shareable allocation fallback");
+      kbase_dev->ahb_shareable = kbase_kmod_probe_ahb(&kbase_dev->base);
+      if (kbase_dev->ahb_shareable)
+         mesa_logi("kbase: Gralloc AHardwareBuffer validated for placed memory");
+      else if (kbase_dev->dma_heap_fd < 0)
+         mesa_logw("kbase: neither DMA-HEAP nor Gralloc passed placed-memory "
+                   "validation; VK_EXT_map_memory_placed remains disabled");
+   }
 
    if (!kbase_dev->base.props.gpu_id) {
       mesa_loge("kbase: failed to determine GPU ID from properties");
@@ -1688,21 +1890,109 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       },
    };
 
-   if (ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req)) {
-      mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: %s", strerror(errno));
+   /* Some MediaTek CSF kernels build kbase with the SLC dynamic-policy
+    * UAPI extension. That changes the encoded _IOWR size of MEM_IMPORT
+    * from Arm's 24-byte union to a 40-byte union carrying PBHA hints.
+    * The ioctl number stays 22; an Arm-layout request is rejected with
+    * ENOTTY. Try the Arm ABI first, then retry the known MTK layout only
+    * for ENOTTY. Zero PBHA fields request the kernel's no-hint path.
+    * Keep the successful layout for later allocations in this process:
+    * 0 = unknown, 1 = Arm, 2 = MTK SLC.
+    */
+   static uint32_t mem_import_layout;
+   int import_ret = -1;
+
+   if (p_atomic_read(&mem_import_layout) != 2) {
+      import_ret = ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req);
+      if (!import_ret && p_atomic_cmpxchg(&mem_import_layout, 0, 1) == 0)
+         mesa_logi("kbase: MEM_IMPORT accepted Arm UAPI layout (24 bytes)");
+   }
+
+   if (import_ret && (p_atomic_read(&mem_import_layout) == 2 ||
+                      errno == ENOTTY)) {
+      union {
+         struct {
+            uint64_t flags;
+            uint64_t phandle;
+            uint32_t type;
+            uint32_t padding;
+            uint32_t vk_allocate_memory_call_id;
+            uint8_t num_planes;
+            uint8_t pbha_8bit;
+            uint8_t alignment[6];
+         } in;
+         struct {
+            uint64_t flags;
+            uint64_t gpu_va;
+            uint64_t va_pages;
+            uint8_t pbha_8bit;
+            uint8_t alignment[7];
+         } out;
+      } mtk_req = {
+         .in = {
+            .flags = req.in.flags,
+            .phandle = req.in.phandle,
+            .type = req.in.type,
+            .padding = req.in.padding,
+         },
+      };
+      static_assert(sizeof(mtk_req) == 40, "MTK SLC MEM_IMPORT layout");
+
+      if (p_atomic_read(&mem_import_layout) != 2)
+         mesa_logw("kbase: Arm MEM_IMPORT layout rejected with ENOTTY; "
+                   "retrying MTK SLC layout (40 bytes)");
+      import_ret = ioctl(dev->fd,
+                         _IOWR(KBASE_IOCTL_TYPE, 22, __typeof__(mtk_req)),
+                         &mtk_req);
+      if (!import_ret) {
+         req.out.flags = mtk_req.out.flags;
+         req.out.gpu_va = mtk_req.out.gpu_va;
+         req.out.va_pages = mtk_req.out.va_pages;
+         if (p_atomic_cmpxchg(&mem_import_layout, 0, 2) == 0)
+            mesa_logi("kbase: MEM_IMPORT accepted MTK SLC UAPI layout (40 bytes)");
+      }
+   }
+
+   if (import_ret) {
+      kbase_diag("MEM_IMPORT failed: errno=%d (%s) fd=%d size=%" PRIu64
+                 " flags=0x%" PRIx64 " ABI-layout=%u",
+                 errno, strerror(errno), kbase_bo->dmabuf_fd, size,
+                 import_flags, p_atomic_read(&mem_import_layout));
+      mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: errno=%d (%s), "
+                "fd=%d size=%" PRIu64 " flags=0x%" PRIx64
+                " layout=%u",
+                errno, strerror(errno), kbase_bo->dmabuf_fd, size,
+                import_flags, p_atomic_read(&mem_import_layout));
       goto err_close_dmabuf;
    }
 
+   if (!req.out.va_pages || req.out.va_pages > UINT64_MAX / page_size ||
+       (size && req.out.va_pages * page_size < size)) {
+      struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+      ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+      kbase_diag("MEM_IMPORT returned invalid or undersized page count");
+      errno = EINVAL;
+      goto err_close_dmabuf;
+   }
    const uint64_t bo_size = req.out.va_pages * page_size;
+   kbase_diag("MEM_IMPORT succeeded: fd=%d gpu_va=0x%" PRIx64
+              " pages=%" PRIu64 " size=%" PRIu64 " flags=0x%" PRIx64
+              " layout=%u", kbase_bo->dmabuf_fd,
+              (uint64_t)req.out.gpu_va, (uint64_t)req.out.va_pages,
+              bo_size, (uint64_t)req.out.flags,
+              p_atomic_read(&mem_import_layout));
    kbase_bo->same_va =
       (req.out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP)) != 0;
+   kbase_bo->placed_cpu_ptr = NULL;
 
    kbase_bo->gpu_mapping =
       mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd,
            req.out.gpu_va);
    if (kbase_bo->gpu_mapping == MAP_FAILED) {
-      mesa_loge("kbase: mmap of imported dma-buf failed: %s",
-                strerror(errno));
+      mesa_loge("kbase: mmap of imported dma-buf failed: errno=%d (%s), "
+                "cookie=0x%" PRIx64 " flags=0x%" PRIx64 " pages=%" PRIu64,
+                errno, strerror(errno), (uint64_t)req.out.gpu_va,
+                (uint64_t)req.out.flags, (uint64_t)req.out.va_pages);
       kbase_bo->gpu_mapping = NULL;
       struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
       ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
@@ -1714,15 +2004,31 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
          mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED,
               kbase_bo->dmabuf_fd, 0);
       if (kbase_bo->cpu_ptr == MAP_FAILED) {
-         mesa_loge("kbase: CPU mmap of imported dma-buf failed: %s",
-                   strerror(errno));
+         mesa_loge("kbase: CPU mmap of imported dma-buf failed: errno=%d (%s), "
+                   "fd=%d size=%" PRIu64,
+                   errno, strerror(errno), kbase_bo->dmabuf_fd, bo_size);
          kbase_bo->cpu_ptr = NULL;
          goto err_unmap_gpu;
       }
       kbase_bo->owns_cpu_mapping = true;
    }
 
-   kbase_bo->gpu_va = (uintptr_t)kbase_bo->gpu_mapping;
+   /* MEM_IMPORT may return a cookie rather than a final GPU VA.
+    * BASE_MEM_NEED_MMAP means mmap(cookie) is required to bind the imported
+    * region in the shared VA zone; for that case the address returned by
+    * the kbase-fd mmap is the actual GPU VA.  The separate dma-buf mapping
+    * in cpu_ptr is only for CPU access on kernels whose UMM mapping rejects
+    * CPU faults.  Without NEED_MMAP, MEM_IMPORT already returned a real VA.
+    */
+   kbase_bo->gpu_va = (req.out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP))
+                         ? (uintptr_t)kbase_bo->gpu_mapping
+                         : req.out.gpu_va;
+   kbase_diag("MEM_IMPORT VA tracking: cookie=0x%" PRIx64
+              " returned_flags=0x%" PRIx64 " gpu_mapping=%p cpu_mapping=%p"
+              " final_gpu_va=0x%" PRIx64,
+              (uint64_t)req.out.gpu_va, (uint64_t)req.out.flags,
+              kbase_bo->gpu_mapping, kbase_bo->cpu_ptr,
+              (uint64_t)kbase_bo->gpu_va);
    uint32_t handle = p_atomic_inc_return(&kbase_dev->next_handle);
    uint32_t flags = kmod_flags;
    if (external_import)
@@ -1759,14 +2065,151 @@ kbase_kmod_bo_alloc_dmabuf(struct pan_kmod_dev *dev, uint64_t size,
    };
 
    if (ioctl(kbase_dev->dma_heap_fd, DMA_HEAP_IOCTL_ALLOC, &alloc)) {
-      mesa_loge("kbase: DMA_HEAP_IOCTL_ALLOC failed: %s", strerror(errno));
+      kbase_diag("DMA_HEAP_IOCTL_ALLOC failed: heap_fd=%d size=%" PRIu64
+                 " errno=%d (%s)", kbase_dev->dma_heap_fd,
+                 (uint64_t)alloc.len, errno, strerror(errno));
+      mesa_loge("kbase: DMA_HEAP_IOCTL_ALLOC failed: errno=%d (%s), "
+                "heap_fd=%d size=%" PRIu64,
+                errno, strerror(errno), kbase_dev->dma_heap_fd,
+                (uint64_t)alloc.len);
       return NULL;
    }
 
    struct pan_kmod_bo *bo = kbase_kmod_import_dmabuf(
       dev, NULL, alloc.fd, alloc.len, kmod_flags, false);
+   kbase_diag("DMA-HEAP import result=%s fd=%d size=%" PRIu64,
+              bo ? "PASSED" : "FAILED", alloc.fd, (uint64_t)alloc.len);
    close(alloc.fd);
    return bo;
+}
+
+/* When Android has no usable DMA-HEAP, gralloc can provide a
+ * shareable BLOB AHardwareBuffer. Import the actual dma-buf fd from the
+ * native handle; on some MediaTek grallocs fd 0 is metadata, not the buffer.
+ * This is the tested fallback from panvk-kbase-android patch 0133. */
+static struct pan_kmod_bo *
+kbase_kmod_bo_alloc_ahb(struct pan_kmod_dev *dev, uint64_t size,
+                        uint32_t kmod_flags)
+{
+#ifdef __ANDROID__
+   struct ahb_desc {
+      uint32_t width, height, layers, format;
+      uint64_t usage;
+      uint32_t stride, rfu0;
+      uint64_t rfu1;
+   };
+   struct native_handle {
+      int version, num_fds, num_ints, data[];
+   };
+   /* AHardwareBuffer NDK entry points are exported by libandroid.so.
+    * libnativewindow.so is the implementation dependency, not the NDK API
+    * library; looking there makes this fallback unavailable on Android. */
+   void *lib = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+   int (*ahb_alloc)(const struct ahb_desc *, void **) =
+      lib ? dlsym(lib, "AHardwareBuffer_allocate") : NULL;
+   void (*ahb_release)(void *) =
+      lib ? dlsym(lib, "AHardwareBuffer_release") : NULL;
+   const struct native_handle *(*ahb_handle)(const void *) =
+      lib ? dlsym(lib, "AHardwareBuffer_getNativeHandle") : NULL;
+
+   kbase_diag("AHB API load: libandroid.so=%s allocate=%s release=%s nativeHandle=%s",
+              lib ? "loaded" : "FAILED",
+              ahb_alloc ? "yes" : "no", ahb_release ? "yes" : "no",
+              ahb_handle ? "yes" : "no");
+   if (!ahb_alloc || !ahb_release || !ahb_handle) {
+      mesa_logw("kbase: Gralloc AHardwareBuffer API unavailable in libandroid.so");
+      if (lib)
+         dlclose(lib);
+      return NULL;
+   }
+
+   const uint64_t len = ALIGN_POT(size, 4096);
+   if (len > UINT32_MAX) {
+      dlclose(lib);
+      return NULL;
+   }
+
+   const uint64_t cpu = (kmod_flags & PAN_KMOD_BO_FLAG_WB_MMAP)
+                           ? 0x33 /* CPU_READ_OFTEN | CPU_WRITE_OFTEN */
+                           : 0x22 /* CPU_READ_RARELY | CPU_WRITE_RARELY */;
+   struct ahb_desc desc = {
+      .width = (uint32_t)len, .height = 1, .layers = 1,
+      .format = 0x21 /* AHARDWAREBUFFER_FORMAT_BLOB */,
+      .usage = cpu | (1ull << 24) /* GPU_DATA_BUFFER */,
+   };
+   void *ahb = NULL;
+
+   int ahb_ret = ahb_alloc(&desc, &ahb);
+   kbase_diag("AHB BLOB allocation attempt 1: result=%d size=%" PRIu64
+              " usage=0x%" PRIx64, ahb_ret, len, desc.usage);
+   if (ahb_ret) {
+      desc.usage = cpu;
+      ahb_ret = ahb_alloc(&desc, &ahb);
+      kbase_diag("AHB BLOB allocation attempt 2: result=%d size=%" PRIu64
+                 " usage=0x%" PRIx64, ahb_ret, len, desc.usage);
+      if (ahb_ret) {
+         mesa_logw("kbase: Gralloc BLOB allocation of %" PRIu64
+                   " bytes failed", len);
+         dlclose(lib);
+         return NULL;
+      }
+   }
+
+   const struct native_handle *h = ahb_handle(ahb);
+   struct pan_kmod_bo *bo = NULL;
+   if (!h) {
+      mesa_logw("kbase: AHardwareBuffer_getNativeHandle returned NULL");
+   } else {
+      kbase_diag("AHB native handle: fds=%d ints=%d", h->num_fds, h->num_ints);
+      mesa_logd("kbase: Gralloc BLOB native handle has %d fds and %d ints",
+                h->num_fds, h->num_ints);
+   }
+
+   /* Do not identify dma-bufs by their /proc/self/fd symlink text: vendor
+    * kernels and gralloc implementations use different names.  The native
+    * handle's first num_fds entries are file descriptors; try each one and
+    * let KBASE_IOCTL_MEM_IMPORT validate it.  This also handles handles
+    * where metadata and pixel/buffer fds appear in different orders. */
+   for (int i = 0; h && i < h->num_fds && !bo; i++) {
+      int fd = h->data[i];
+      char path[32], link[128] = "";
+      snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+      ssize_t link_len = readlink(path, link, sizeof(link) - 1);
+      if (link_len >= 0)
+         link[link_len] = '\0';
+
+      if (fcntl(fd, F_GETFD) < 0) {
+         mesa_logw("kbase: Gralloc native-handle fd[%d]=%d is invalid: %s",
+                   i, fd, strerror(errno));
+         continue;
+      }
+
+      mesa_logd("kbase: trying Gralloc native-handle fd[%d]=%d (%s)",
+                i, fd, link_len >= 0 ? link : "unresolved");
+      errno = 0;
+      bo = kbase_kmod_import_dmabuf(dev, NULL, fd, len, kmod_flags, false);
+      kbase_diag("AHB fd[%d]=%d import %s%s", i, fd,
+                 bo ? "PASSED" : "FAILED",
+                 bo ? "" : strerror(errno));
+      if (!bo)
+         mesa_logw("kbase: Gralloc fd[%d] import failed: errno=%d (%s)",
+                   i, errno, strerror(errno));
+   }
+
+   /* The import owns a duplicated dma-buf fd, so the AHardwareBuffer can
+    * be released immediately. */
+   ahb_release(ahb);
+   dlclose(lib);
+   if (!bo)
+      kbase_diag("AHB fallback exhausted: no native-handle FD imported");
+   else
+      kbase_diag("AHB fallback import succeeded");
+   if (!bo)
+      mesa_logw("kbase: no Gralloc native-handle fd passed KBASE import");
+   return bo;
+#else
+   return NULL;
+#endif
 }
 
 static struct pan_kmod_bo *
@@ -1777,11 +2220,25 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev,
    struct kbase_kmod_dev *kbase_dev =
       container_of(dev, struct kbase_kmod_dev, base);
 
-   if (!exclusive_vm && kbase_dev->dma_heap_fd >= 0 &&
+   if (!exclusive_vm &&
        !(kmod_flags & (PAN_KMOD_BO_FLAG_EXECUTABLE |
                        PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT |
-                       PAN_KMOD_BO_FLAG_CSF_EVENT)))
-      return kbase_kmod_bo_alloc_dmabuf(dev, size, kmod_flags);
+                       PAN_KMOD_BO_FLAG_CSF_EVENT))) {
+      if (kbase_dev->dma_heap_fd >= 0) {
+         struct pan_kmod_bo *bo =
+            kbase_kmod_bo_alloc_dmabuf(dev, size, kmod_flags);
+         if (bo || !kbase_dev->ahb_shareable)
+            return bo;
+         mesa_logw("kbase: DMA-HEAP allocation failed; trying validated AHB");
+      }
+      if (kbase_dev->ahb_shareable)
+         return kbase_kmod_bo_alloc_ahb(dev, size, kmod_flags);
+
+      mesa_loge("kbase: shareable BO requested but neither DMA-HEAP nor "
+                "validated Gralloc BLOB is available");
+      errno = ENOTSUP;
+      return NULL;
+   }
 
    const uint64_t page_size = 4096;
    uint64_t va_pages = (size + page_size - 1) / page_size;
@@ -1896,6 +2353,14 @@ kbase_kmod_bo_free(struct pan_kmod_bo *bo)
 
    pan_kmod_bo_cleanup(bo);
 
+   /* Release any remaining independent placed alias before the backing BO. */
+   if (kbase_bo->dmabuf_fd >= 0 && kbase_bo->placed_cpu_ptr &&
+       kbase_bo->placed_cpu_ptr != kbase_bo->cpu_ptr &&
+       kbase_bo->placed_cpu_ptr != kbase_bo->gpu_mapping) {
+      munmap(kbase_bo->placed_cpu_ptr, bo->size);
+      kbase_bo->placed_cpu_ptr = NULL;
+   }
+
    /* For SAME_VA regions, munmap() alone tears the whole region down
     * (free-on-close); a MEM_FREE afterwards would hit a stale VA.  For
     * zone regions (EXEC_VA), munmap() only drops the CPU mapping and the
@@ -1965,38 +2430,195 @@ kbase_kmod_bo_get_mmap_offset(struct pan_kmod_bo *bo)
    return (off_t)kbase_bo->gpu_va;
 }
 
-/* Return the CPU mapping established at allocation time.  A SAME_VA region
- * has exactly one CPU mapping (its address is the GPU VA), so we cannot
- * honor requests for a caller-chosen address. */
+/* Native SAME_VA BOs have one fixed CPU/GPU mapping. Shareable dma-buf
+ * BOs can additionally be aliased at the address requested by
+ * VK_EXT_map_memory_placed. */
 static void *
-kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, UNUSED int prot, UNUSED int flags,
+kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags,
                    void *host_addr)
 {
    struct kbase_kmod_bo *kbase_bo =
       container_of(bo, struct kbase_kmod_bo, base);
-
-   if (host_addr != NULL && host_addr != kbase_bo->cpu_ptr) {
-      mesa_loge("kbase: mapping a BO at a caller-chosen address is not "
-                "supported (SAME_VA)");
-      errno = ENOTSUP;
-      return MAP_FAILED;
-   }
 
    if (!kbase_bo->cpu_ptr) {
       errno = EINVAL;
       return MAP_FAILED;
    }
 
+   if (host_addr && kbase_bo->dmabuf_fd < 0) {
+      mesa_loge("kbase: placed mapping requires a dma-buf backed BO");
+      errno = ENOTSUP;
+      return MAP_FAILED;
+   }
+
+   if (host_addr && host_addr != kbase_bo->cpu_ptr) {
+      void *alias = mmap(host_addr, bo->size, prot,
+                         (flags & ~MAP_PRIVATE) | MAP_SHARED | MAP_FIXED,
+                         kbase_bo->dmabuf_fd, 0);
+      if (alias == MAP_FAILED) {
+         mesa_loge("kbase: dma-buf placed mmap failed: %s", strerror(errno));
+      } else {
+         kbase_bo->placed_cpu_ptr = alias;
+      }
+      return alias;
+   }
+
    return kbase_bo->cpu_ptr;
 }
 
-/* The mapping belongs to the BO and lives until bo_free: unmapping a
- * SAME_VA region would free its GPU mapping too. */
+/* A dma-buf alias is independent from the persistent GPU mapping. Native
+ * SAME_VA mappings must remain alive until BO destruction. */
 static int
-kbase_kmod_bo_munmap(UNUSED struct pan_kmod_bo *bo, UNUSED void *host_addr,
-                     UNUSED size_t size)
+kbase_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
 {
+   struct kbase_kmod_bo *kbase_bo =
+      container_of(bo, struct kbase_kmod_bo, base);
+
+   if (kbase_bo->dmabuf_fd >= 0 && host_addr != kbase_bo->cpu_ptr) {
+      int ret = munmap(host_addr, size);
+      if (!ret && kbase_bo->placed_cpu_ptr == host_addr)
+         kbase_bo->placed_cpu_ptr = NULL;
+      return ret;
+   }
+
    return 0;
+}
+
+/* Exercise the exact mechanism used by VK_EXT_map_memory_placed.  Reserve
+ * an address first so MAP_FIXED can only replace our own reservation, then
+ * verify that the placed alias sees writes made through the persistent map. */
+static bool
+kbase_kmod_probe_shareable_bo(struct pan_kmod_dev *dev,
+                              struct pan_kmod_bo *bo, const char *source)
+{
+   if (!bo) {
+      kbase_diag("%s probe stopped: allocation/import returned NULL; errno=%d (%s)",
+                 source, errno, strerror(errno));
+      mesa_logw("kbase: %s allocation or KBASE_IOCTL_MEM_IMPORT probe failed",
+                source);
+      return false;
+   }
+
+   int export_fd = kbase_kmod_bo_export_fd(bo);
+   if (export_fd < 0) {
+      int err = errno;
+      kbase_diag("%s export failed: errno=%d (%s)", source, err, strerror(err));
+      mesa_logw("kbase: DMA-BUF export probe failed at fd duplication: errno=%d (%s)",
+                err, strerror(err));
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+
+   errno = 0;
+   off_t exported_size = lseek(export_fd, 0, SEEK_END);
+   if (exported_size <= 0) {
+      int err = errno;
+      kbase_diag("%s exported dma-buf size invalid: lseek=%lld errno=%d (%s)",
+                 source, (long long)exported_size, err,
+                 err ? strerror(err) : "zero-sized dma-buf");
+      mesa_logw("kbase: DMA-BUF size probe failed: lseek=%lld errno=%d (%s)",
+                (long long)exported_size, err,
+                err ? strerror(err) : "no errno (zero-sized dma-buf)");
+      close(export_fd);
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+   mesa_logi("kbase: DMA-BUF export probe passed: fd=%d size=%lld",
+             export_fd, (long long)exported_size);
+   close(export_fd);
+
+   size_t size = pan_kmod_bo_size(bo);
+   struct kbase_kmod_bo *kbase_bo =
+      container_of(bo, struct kbase_kmod_bo, base);
+   void *reserved = mmap(NULL, size, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+   if (reserved == MAP_FAILED) {
+      mesa_logw("kbase: could not reserve VA for DMA-BUF alias probe: %s",
+                strerror(errno));
+      kbase_kmod_bo_free(bo);
+      return false;
+   }
+
+   kbase_diag("%s alias probe: reserved=%p size=%zu", source, reserved, size);
+   void *alias = kbase_kmod_bo_mmap(bo, PROT_READ | PROT_WRITE,
+                                    MAP_SHARED, reserved);
+   bool usable = alias == reserved;
+   kbase_diag("%s alias mmap: requested=%p returned=%p exact=%d errno=%d (%s)",
+              source, reserved, alias, usable, errno, strerror(errno));
+   if (usable) {
+      volatile uint32_t *original = kbase_bo->cpu_ptr;
+      volatile uint32_t *placed = alias;
+      const size_t words = size / sizeof(uint32_t);
+
+      for (size_t i = 0; i < words; i++)
+         original[i] = (uint32_t)i ^ 0x6b626173;
+      for (size_t i = 0; i < words; i++) {
+         if (placed[i] != ((uint32_t)i ^ 0x6b626173)) {
+            usable = false;
+            break;
+         }
+      }
+      if (usable) {
+         for (size_t i = 0; i < words; i++)
+            placed[i] = (uint32_t)i ^ 0x706c6163;
+
+         /* Match the Peanuts Native readiness test: its OPAQUE_FD path
+          * requires aliases to support page protection changes as well as
+          * bidirectional visibility.  Keep this probe on a page inside the
+          * reserved mapping so it cannot affect unrelated process memory. */
+         if (mprotect((char *)alias + 4096, 4096, PROT_READ)) {
+            mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ) failed: %s",
+                      strerror(errno));
+            usable = false;
+         } else if (mprotect((char *)alias + 4096, 4096,
+                             PROT_READ | PROT_WRITE)) {
+            mesa_logw("kbase: DMA-BUF alias mprotect(PROT_READ|PROT_WRITE) "
+                      "restore failed: %s", strerror(errno));
+            usable = false;
+         }
+
+         for (size_t i = 0; i < words; i++) {
+            if (original[i] != ((uint32_t)i ^ 0x706c6163) ||
+                placed[i] != original[i]) {
+               usable = false;
+               break;
+            }
+         }
+      }
+      kbase_diag("%s alias validation: bidirectional=%s mprotect=%s",
+                 source, usable ? "passed" : "failed",
+                 usable ? "passed" : "failed-or-not-reached");
+      if (!usable)
+         mesa_logw("kbase: DMA-BUF placed alias failed bidirectional "
+                   "visibility or mprotect validation");
+      if (kbase_kmod_bo_munmap(bo, alias, size))
+         usable = false;
+   } else {
+      mesa_logw("kbase: DMA-BUF exact-address alias probe failed: %s",
+                strerror(errno));
+      munmap(reserved, size);
+   }
+
+   kbase_kmod_bo_free(bo);
+   kbase_diag("%s placed-memory probe FINAL=%s", source,
+              usable ? "PASSED" : "FAILED");
+   mesa_logi("kbase: %s placed-memory probe %s", source,
+             usable ? "passed" : "failed");
+   return usable;
+}
+
+static bool
+kbase_kmod_probe_dma_heap(struct pan_kmod_dev *dev)
+{
+   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_dmabuf(dev, 65536, 0);
+   return kbase_kmod_probe_shareable_bo(dev, bo, "DMA-HEAP");
+}
+
+static bool
+kbase_kmod_probe_ahb(struct pan_kmod_dev *dev)
+{
+   struct pan_kmod_bo *bo = kbase_kmod_bo_alloc_ahb(dev, 65536, 0);
+   return kbase_kmod_probe_shareable_bo(dev, bo, "Gralloc AHardwareBuffer");
 }
 
 /* kbase does not expose per-BO fence objects.
@@ -2026,7 +2648,9 @@ kbase_kmod_flush_bo_map_syncs(struct pan_kmod_dev *dev)
 
       struct kbase_ioctl_mem_sync req = {
          .handle = kbase_bo->gpu_va,
-         .user_addr = (uintptr_t)kbase_bo->cpu_ptr + sync->start,
+         .user_addr = (uintptr_t)(kbase_bo->placed_cpu_ptr ?
+                         kbase_bo->placed_cpu_ptr : kbase_bo->cpu_ptr) +
+                      sync->start,
          .size = sync->size,
          .type = sync->type == PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH
                     ? BASE_SYNCSET_OP_MSYNC
