@@ -802,6 +802,11 @@ panvk_per_arch(CmdWriteTimestamp2)(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(panvk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(panvk_query_pool, pool, queryPool);
 
+   /* Keep Android clients that pass a non-single-bit stage mask running.
+    * ALL_COMMANDS conservatively orders the timestamp across subqueues. */
+   if (util_bitcount64(stage) != 1)
+      stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
    panvk_cmd_write_timestamp_query(cmd, stage, pool, query);
 }
 
