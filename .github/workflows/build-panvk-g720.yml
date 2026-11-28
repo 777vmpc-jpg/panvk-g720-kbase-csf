@@ -242,11 +242,18 @@ jobs:
           set -euo pipefail
           cp output-heap.txt output/HEAP-SETTINGS.txt
           readelf -h output/libvulkan_panfrost.so | grep -E 'Machine:.*AArch64'
+          nm -D --defined-only output/libvulkan_panfrost.so > output/ELF-SYMBOLS.txt
+          grep -E '[[:space:]]T[[:space:]]vk_icdGetInstanceProcAddr$' output/ELF-SYMBOLS.txt
+          grep -E '[[:space:]]D[[:space:]]HMI$' output/ELF-SYMBOLS.txt
+          readelf -d output/libvulkan_panfrost.so > output/ELF-DYNAMIC.txt
+          if grep -Ei 'NEEDED.*lib(x11|xcb|xshmfence|xrandr)' output/ELF-DYNAMIC.txt; then
+            exit 1
+          fi
           cat > output/meta.json <<'JSON'
           {
             "schemaVersion": 1,
-            "name": "PanVK G720 MC7 BOTW + Peanuts Candidate",
-            "packageVersion": "1.1.9-botw-peanuts-candidate",
+            "name": "PanVK G720 MC7 BOTW + Peanuts ICD Fix",
+            "packageVersion": "1.1.9-botw-peanuts-icd-fix",
             "driverVersion": "26.3.0-devel",
             "vendor": "Mesa / PanVK",
             "minApi": 30,
