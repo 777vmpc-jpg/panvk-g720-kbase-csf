@@ -247,8 +247,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash ./setup.sh
-          meson configure build -Dbuildtype=debugoptimized -Db_ndebug=false
+          PANVK_ANDROID_BUILDTYPE=debugoptimized bash ./setup.sh
           meson compile -C build
 
       - name: Localizar biblioteca compilada
