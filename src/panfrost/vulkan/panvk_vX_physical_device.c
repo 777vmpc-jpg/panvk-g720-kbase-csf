@@ -908,7 +908,7 @@ panvk_per_arch(get_physical_device_properties)(
       /* Software limit to keep VkCommandBuffer tracking sane. The HW supports
        * up to 2^9 vertex attributes.
        */
-      .maxVertexInputAttributes = MAX_VBS,
+      .maxVertexInputAttributes = 16,
       .maxVertexInputBindings = MAX_VBS,
       /* MALI_ATTRIBUTE::offset is 32-bit. */
       .maxVertexInputAttributeOffset = UINT32_MAX,
