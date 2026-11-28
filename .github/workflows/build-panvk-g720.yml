@@ -10,6 +10,7 @@ on:
       - kakarot-placed-memory
       - kakarot-display-diagnostics
       - kakarot-ahb-libandroid-fdprobe
+      - panvk/version20-restored
 
 permissions:
   contents: read
@@ -331,6 +332,15 @@ jobs:
             echo "SHA256:"
             sha256sum output/libvulkan_panfrost.so
           } > output/BUILD-INFO.txt
+
+      - name: Validar e empacotar driver ARM64
+        run: |
+          set -euo pipefail
+          readelf -h output/libvulkan_panfrost.so | tee output/ELF.txt
+          grep -Eq 'Class: +ELF64' output/ELF.txt
+          grep -Eq 'Machine: +AArch64' output/ELF.txt
+          (cd output && zip -9 PanVK-Faux123-1.1.9-MC7-v20-restored.adpkg.zip libvulkan_panfrost.so meta.json)
+          unzip -tq output/PanVK-Faux123-1.1.9-MC7-v20-restored.adpkg.zip
 
       - name: Publicar biblioteca compilada
         uses: actions/upload-artifact@v4
